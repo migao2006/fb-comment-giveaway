@@ -63,4 +63,15 @@ describe('bookmarklet UI', () => {
     const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
     expect(host.shadowRoot!.querySelectorAll('[data-action="copy-load-diagnostic"]')).toHaveLength(2);
   });
+  it('shows separate main-comment and reply counters', async () => {
+    document.body.innerHTML = `<article><a href="/host">主辦人</a>
+      <article data-comment-id="main"><a href="/a">甲</a><span dir="auto">主留言</span>
+        <article data-comment-id="reply" data-comment-depth="1"><a href="/b">乙</a><span dir="auto">回覆內容</span></article>
+      </article>
+    </article>`;
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
+    expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
+  });
 });

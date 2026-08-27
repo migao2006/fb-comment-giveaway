@@ -51,4 +51,11 @@ describe('bookmarklet UI', () => {
     expect(host.shadowRoot!.querySelector('[data-status]')!.textContent).toContain('切換貼文');
     expect(host.shadowRoot!.querySelector('[data-results]')!.classList.contains('hidden')).toBe(true);
   });
+  it('shows an error code when a post cannot be located', async () => {
+    document.body.innerHTML = '<main role="main">尚未載入貼文</main>';
+    await import('../src/bookmarklet');
+    const error = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-error]')!;
+    expect(error.classList.contains('hidden')).toBe(false);
+    expect(error.textContent).toContain('POST_NOT_FOUND');
+  });
 });

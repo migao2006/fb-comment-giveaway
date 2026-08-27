@@ -222,7 +222,23 @@ function mount(): void {
   async function copyDiagnostic(): Promise<void> {
     const labelNodes = [...document.querySelectorAll<HTMLElement>('[aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]')];
     const labelPatterns = [...new Set(labelNodes.map((node) => `${node.tagName.toLowerCase()}[role=${node.getAttribute('role') ?? '-'}] ${safeLabelPattern(node.getAttribute('aria-label') ?? '')}`))].slice(0, 12);
-    const details = { code: 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '', articles: document.querySelectorAll('article').length, roleArticles: document.querySelectorAll('[role="article"]').length, labeledComments: labelNodes.length, labelPatterns, mainElements: document.querySelectorAll('main, [role="main"]').length, language: document.documentElement.lang || 'unknown', browser: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}` };
+    const roleLinkNodes = [...document.querySelectorAll<HTMLElement>('[role="link"]')];
+    const details = {
+      diagnosticVersion: 2,
+      code: 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '',
+      articles: document.querySelectorAll('article').length,
+      roleArticles: document.querySelectorAll('[role="article"]').length,
+      anchors: document.querySelectorAll('a').length,
+      hrefAnchors: document.querySelectorAll('a[href]').length,
+      roleLinks: roleLinkNodes.length,
+      roleLinkPatterns: [...new Set(roleLinkNodes.slice(0, 20).map((node) => `${node.tagName.toLowerCase()} ${safeLabelPattern(node.getAttribute('aria-label') ?? '') || `text-length:${(node.textContent ?? '').trim().length}`}`))].slice(0, 10),
+      dirAutoElements: document.querySelectorAll('[dir="auto"]').length,
+      labeledComments: labelNodes.length, labelPatterns,
+      ancestorTraces: labelNodes.slice(0, 6).map((node) => ({ signal: `${node.tagName.toLowerCase()}[role=${node.getAttribute('role') ?? '-'}] ${safeLabelPattern(node.getAttribute('aria-label') ?? '')}`, ancestors: safeAncestorTrace(node) })),
+      roleCounts: roleCounts(),
+      mainElements: document.querySelectorAll('main, [role="main"]').length,
+      language: document.documentElement.lang || 'unknown', browser: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}`,
+    };
     const state = query<HTMLElement>('[data-copy-state]');
     try { await navigator.clipboard.writeText(JSON.stringify(details, null, 2)); state.textContent = '已複製'; }
     catch { state.textContent = '複製失敗，請截圖錯誤代碼'; }
@@ -284,6 +300,25 @@ function storeFingerprint(store: Map<string, FacebookComment>): string {
 
 function safeLabelPattern(value: string): string {
   return value.replace(/[^\s留言回覆按讚的這則查看更多，。:：()（）[\]\-]/gu, '•').replace(/•+/g, '•').slice(0, 120);
+}
+
+function safeAncestorTrace(start: Element): string[] {
+  const trace: string[] = [];
+  let node: Element | null = start;
+  for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    const dataNames = node.getAttributeNames().filter((name) => name.startsWith('data-')).slice(0, 5).join(',') || '-';
+    trace.push(`${node.tagName.toLowerCase()}[role=${node.getAttribute('role') ?? '-'}] links=${node.querySelectorAll('a[href],[role="link"]').length} auto=${node.querySelectorAll('[dir="auto"]').length} spans=${node.querySelectorAll('span').length} buttons=${node.querySelectorAll('[role="button"],button').length} data=${dataNames}`);
+  }
+  return trace;
+}
+
+function roleCounts(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  document.querySelectorAll<HTMLElement>('[role]').forEach((node) => {
+    const role = node.getAttribute('role') ?? 'unknown';
+    counts[role] = (counts[role] ?? 0) + 1;
+  });
+  return counts;
 }
 
 function clampNumber(value: string, minimum: number, maximum: number): number {

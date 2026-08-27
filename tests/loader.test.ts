@@ -93,6 +93,49 @@ describe('loadMoreComments', () => {
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
+  it('expands exact 查看更多 only inside a comment row', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const comment = document.createElement('article');
+    comment.setAttribute('aria-label', '甲的留言');
+    const commentMore = document.createElement('button');
+    commentMore.textContent = '查看更多';
+    const postMore = document.createElement('button');
+    postMore.textContent = '查看更多';
+    [commentMore, postMore].forEach((button) => { button.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect); });
+    const commentClick = vi.fn();
+    const postClick = vi.fn();
+    commentMore.addEventListener('click', commentClick);
+    postMore.addEventListener('click', postClick);
+    comment.append(commentMore);
+    root.append(comment, postMore);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(commentClick).toHaveBeenCalledTimes(1);
+    expect(postClick).not.toHaveBeenCalled();
+  });
+
+  it('does not treat post text 查看更多 as a comment merely because an ancestor mentions a comment count', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    root.setAttribute('aria-label', '貼文，167 則留言');
+    const more = document.createElement('button');
+    more.textContent = '查看更多';
+    more.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
+    const clicked = vi.fn();
+    more.addEventListener('click', clicked);
+    root.append(more);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
   it('does not stop merely because the parsed count stays unchanged for three rounds', async () => {
     vi.useFakeTimers();
     let y = 0;

@@ -135,6 +135,51 @@ describe('parseFacebookPost', () => {
     const result = parseFacebookPost(document, 'https://facebook.com/posts/indented-reply');
     expect(result.comments).toMatchObject([{ authorName: '甲', body: '主留言', kind: 'comment' }]);
     expect(result.replies).toMatchObject([{ authorName: '乙', body: '這是回覆', kind: 'reply' }]);
+    expect(result.replies[0]?.replyToAuthorName).toBeUndefined();
+    expect(result.comments[0]?.sequence).toBeLessThan(result.replies[0]?.sequence ?? 0);
+  });
+
+  it('keeps only explicit comment permalinks, IDs, and semantic comment media', () => {
+    const html = `<article><a href="/host">作者</a><article data-comment-id="c-123" aria-label="甲的留言">
+      <a href="/alice"><img src="https://example.com/avatar.jpg" alt="甲的大頭貼照">甲</a>
+      <span dir="auto">有圖片</span><img data-comment-media src="https://example.com/photo.jpg" alt="圖片">
+      <a href="/posts/9?comment_id=123&ref=share">2 小時</a>
+    </article></article>`;
+    const result = parseFacebookPost(new JSDOM(html, { url: 'https://facebook.com/posts/9' }).window.document);
+    expect(result.comments[0]).toMatchObject({ facebookId: 'c-123', commentUrl: 'https://facebook.com/posts/9?comment_id=123&ref=share' });
+    expect(result.comments[0]?.media).toEqual([{ kind: 'image', url: 'https://example.com/photo.jpg' }]);
+  });
+
+  it('does not borrow a nested reply permalink for its parent and records an explicit parent target', () => {
+    const document = new JSDOM(`<article><a href="/host">作者</a><article data-comment-id="main" aria-label="甲的留言"><a href="/a">甲</a>
+      <span data-comment-body>主留言</span><article data-comment-id="reply" data-comment-depth="1"><a href="/b">乙</a><span dir="auto">回覆</span><a href="/posts/1?comment_id=2">時間</a></article>
+    </article></article>`, { url: 'https://facebook.com/posts/1' }).window.document;
+    const result = parseFacebookPost(document);
+    expect(result.comments[0]?.commentUrl).toBeUndefined();
+    expect(result.replies[0]?.replyToAuthorName).toBe('甲');
+  });
+
+  it('keeps a rendered node ID stable when its truncated body expands', () => {
+    const document = new JSDOM(`<article><a href="/host">作者</a><article aria-label="甲的留言"><a href="/a">甲</a><span data-comment-body>截斷內容</span></article></article>`, { url: 'https://facebook.com/posts/1' }).window.document;
+    const first = parseFacebookPost(document);
+    const id = first.comments[0]?.id;
+    document.querySelector('[data-comment-body]')!.textContent = '完整內容已展開';
+    const second = parseFacebookPost(document);
+    expect(second.comments[0]?.id).toBe(id);
+    expect(second.comments[0]?.body).toBe('完整內容已展開');
+  });
+
+  it('keeps mixed semantic and mobile fallback rows in DOM order and ignores generated DOM ids', () => {
+    const html = `<article><a href="/host">作者</a><section>
+      <div class="row" id="generated-a"><span dir="auto">甲</span><span dir="auto">第一則</span><div role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
+      <article aria-label="乙的留言" id="generated-b"><a href="/b">乙</a><span dir="auto">第二則</span></article>
+      <div class="row" id="generated-c"><span dir="auto">丙</span><span dir="auto">第三則</span><div role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
+    </section></article>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/mixed' }).window.document;
+    const result = parseFacebookPost(document);
+    expect(result.comments.map((comment) => comment.authorName)).toEqual(['甲', '乙', '丙']);
+    expect(result.comments.map((comment) => comment.sequence)).toEqual([1, 2, 3]);
+    expect(result.comments.every((comment) => comment.id.startsWith('rendered-node-'))).toBe(true);
   });
 
 });

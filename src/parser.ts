@@ -1,6 +1,16 @@
 import type { FacebookComment, ParsedFacebookPost } from './types';
 
 const clean = (value: string | null | undefined) => (value ?? '').replace(/\s+/g, ' ').trim();
+const renderedNodeIds = new WeakMap<Element, string>();
+let renderedNodeCounter = 0;
+
+function renderedNodeId(node: Element): string {
+  const existing = renderedNodeIds.get(node);
+  if (existing) return existing;
+  const id = `rendered-node-${++renderedNodeCounter}`;
+  renderedNodeIds.set(node, id);
+  return id;
+}
 
 /** Normalizes Facebook profile links so tracking parameters do not create duplicate entrants. */
 export function canonicalProfileUrl(value: string | null): string | undefined {
@@ -145,6 +155,48 @@ function findBody(node: Element, authorName: string): string {
   return candidates.sort((a, b) => b.length - a.length)[0] ?? '';
 }
 
+function findCommentUrl(node: Element): string | undefined {
+  const scope = withoutNestedComments(node);
+  const link = [...scope.querySelectorAll<HTMLAnchorElement>('a[href]')].find((anchor) => {
+    try {
+      const url = new URL(anchor.href);
+      const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+      return (host === 'facebook.com' || host === 'm.facebook.com' || host === 'mbasic.facebook.com')
+        && (url.searchParams.has('comment_id') || url.searchParams.has('reply_comment_id'));
+    } catch { return false; }
+  });
+  if (!link) return undefined;
+  try {
+    const url = new URL(link.href);
+    url.hostname = 'facebook.com';
+    url.protocol = 'https:';
+    url.hash = '';
+    return url.href;
+  } catch { return undefined; }
+}
+
+function findMedia(node: Element): FacebookComment['media'] | undefined {
+  const scope = withoutNestedComments(node);
+  const media = [...scope.querySelectorAll<HTMLElement>('[data-comment-media], img[alt]')]
+    .map((element) => {
+      const alt = clean(element.getAttribute('alt'));
+      const explicit = element.hasAttribute('data-comment-media');
+      if (!explicit && !/(?:貼圖|sticker|圖片|image|photo)/iu.test(alt)) return undefined;
+      const kind = /(?:貼圖|sticker)/iu.test(alt) ? 'sticker' as const : 'image' as const;
+      const rawUrl = element.getAttribute('src');
+      let url: string | undefined;
+      if (rawUrl) {
+        try {
+          const parsed = new URL(rawUrl, typeof location === 'undefined' ? 'https://facebook.com/' : location.href);
+          if (/^https?:$/.test(parsed.protocol)) url = parsed.href;
+        } catch { /* Keep the media marker without an unsafe URL. */ }
+      }
+      return { kind, ...(url ? { url } : {}) };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  return media.length ? media : undefined;
+}
+
 function commentNodes(root: ParentNode): Element[] {
   const marked = [...root.querySelectorAll('[data-comment-id]')];
   if (marked.length) return marked;
@@ -155,7 +207,7 @@ function commentNodes(root: ParentNode): Element[] {
   });
   const mobileRows = mobileCommentRows(root)
     .filter((row) => !direct.some((node) => node === row || node.contains(row) || row.contains(node)));
-  if (direct.length || mobileRows.length) return [...direct, ...mobileRows];
+  if (direct.length || mobileRows.length) return [...direct, ...mobileRows].sort(compareDomOrder);
 
   const derived = new Set<Element>();
   signals.forEach((signal) => {
@@ -166,6 +218,11 @@ function commentNodes(root: ParentNode): Element[] {
     }
   });
   return [...derived];
+}
+
+function compareDomOrder(left: Element, right: Element): number {
+  if (left === right) return 0;
+  return left.compareDocumentPosition(right) & 4 ? -1 : 1;
 }
 
 function isPlausibleCommentContainer(node: Element): boolean {
@@ -281,7 +338,7 @@ export function parseFacebookPost(
   nodes.forEach((node, index) => {
     const author = findAuthor(node);
     if (!author?.name) { diagnostics.push(`第 ${index + 1} 個留言找不到作者`); return; }
-    const id = node.getAttribute('data-comment-id') || node.getAttribute('id') || `rendered-${index}`;
+    const id = node.getAttribute('data-comment-id') || renderedNodeId(node);
     if (seen.has(id)) return;
     seen.add(id);
     const timestamp = node.querySelector<HTMLElement>('time[datetime], [data-comment-time], a[aria-label*="年"], a[aria-label*="月"]');
@@ -291,13 +348,22 @@ export function parseFacebookPost(
       : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '') || inferredReplies.has(node);
     const timestampValue = timestamp?.getAttribute('datetime') || timestamp?.getAttribute('data-comment-time') || timestamp?.getAttribute('aria-label') || timestamp?.textContent;
     const createdAt = parseFacebookDate(timestampValue);
+    const replyToAuthorName = isReply && parentComment ? findAuthor(parentComment)?.name : undefined;
+    const commentUrl = findCommentUrl(node);
+    const facebookId = node.getAttribute('data-comment-id') || undefined;
+    const media = findMedia(node);
     const item: FacebookComment = {
       id,
+      sequence: index + 1,
       authorName: author.name,
       ...(author.url ? { authorUrl: author.url } : {}),
       body: findBody(node, author.name),
       ...(createdAt ? { createdAt } : {}),
       kind: isReply ? 'reply' : 'comment',
+      ...(replyToAuthorName ? { replyToAuthorName } : {}),
+      ...(commentUrl ? { commentUrl } : {}),
+      ...(facebookId ? { facebookId } : {}),
+      ...(media ? { media } : {}),
     };
     (isReply ? replies : comments).push(item);
   });

@@ -2,11 +2,17 @@ export type CommentKind = 'comment' | 'reply';
 
 export interface FacebookComment {
   id: string;
+  /** Stable discovery order within this local loading session. */
+  sequence?: number;
   authorName: string;
   authorUrl?: string;
   body: string;
   createdAt?: string;
   kind: CommentKind;
+  replyToAuthorName?: string;
+  commentUrl?: string;
+  facebookId?: string;
+  media?: Array<{ kind: 'image' | 'sticker'; url?: string }>;
 }
 
 export interface ParsedFacebookPost {

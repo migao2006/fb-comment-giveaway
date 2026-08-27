@@ -29,18 +29,35 @@ const textOf = (element: Element) => (element.textContent ?? '').replace(/\s+/g,
 function isVisible(element: HTMLElement): boolean {
   const style = getComputedStyle(element);
   const rect = element.getBoundingClientRect();
-  return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+  return isRendered(element, style, rect)
     && rect.bottom >= 0 && rect.top <= window.innerHeight;
 }
 
-function findExpansionButtons(root: ParentNode): HTMLElement[] {
+function isRendered(element: HTMLElement, style = getComputedStyle(element), rect = element.getBoundingClientRect()): boolean {
+  return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+}
+
+function findExpansionButtons(root: ParentNode, visibleOnly = true): HTMLElement[] {
   const candidates = root.querySelectorAll<HTMLElement>('button, [role="button"]');
   return [...candidates].filter((element) => {
     const text = textOf(element);
-    return isVisible(element)
-      && [...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text))
+    return (visibleOnly ? isVisible(element) : isRendered(element))
+      && ([...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
       && !/(?:按讚|心情|反應)/.test(text);
   });
+}
+
+function isTruncatedCommentButton(element: HTMLElement, text: string): boolean {
+  if (text !== '查看更多') return false;
+  let parent = element.parentElement;
+  for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
+    const label = (parent.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim();
+    if (parent.matches('[data-comment-id]') || /(?:的留言|的回覆|comment by .+|reply by .+)$/iu.test(label)) return true;
+    const hasCommentAction = [...parent.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]')]
+      .some((button) => /^留言.+按.+按/u.test(button.getAttribute('aria-label') ?? ''));
+    if (hasCommentAction && parent.querySelectorAll('button, [role="button"]').length <= 12) return true;
+  }
+  return false;
 }
 
 const pause = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve) => {
@@ -90,8 +107,17 @@ export async function loadMoreComments(
     settledBottomRounds = reachedBottom && !pageGrew && !commentsGrew ? settledBottomRounds + 1 : 0;
     previousCount = currentCount;
     previousDocumentHeight = currentDocumentHeight;
-    onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則主留言` });
-    if (settledBottomRounds >= 3) return 'complete';
+    onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則留言（含回覆）` });
+    if (settledBottomRounds >= 3) {
+      const pending = findExpansionButtons(root, false).filter((button) => clickedAtCount.get(button) !== currentCount);
+      if (pending.length) {
+        pending[0]!.scrollIntoView?.({ block: 'center' });
+        settledBottomRounds = 0;
+        await pause(350, signal);
+      } else {
+        return 'complete';
+      }
+    }
   }
   return signal.aborted ? 'aborted' : 'limit-reached';
 }

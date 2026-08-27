@@ -82,4 +82,11 @@ describe('parseFacebookPost', () => {
     const document = new JSDOM(html, { url: 'https://facebook.com/posts/control' }).window.document;
     expect(parseFacebookPost(document, 'https://facebook.com/posts/control').comments).toMatchObject([{ authorName: '參加者', body: '控制項參加' }]);
   });
+  it('parses iPhone role-link authors without anchor or href elements', () => {
+    const html = `<div><header><div role="link"><span>貼文作者</span></div></header><section><div class="comment"><div role="link"><span>無網址參加者</span></div><span dir="auto">role link 參加</span><div role="button" aria-label="留言者，按兩下即可回覆"><span>回覆</span></div></div></section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/role-link' }).window.document;
+    const result = parseFacebookPost(document, 'https://facebook.com/posts/role-link');
+    expect(result.postAuthor?.name).toBe('貼文作者');
+    expect(result.comments).toMatchObject([{ authorName: '無網址參加者', body: 'role link 參加' }]);
+  });
 });

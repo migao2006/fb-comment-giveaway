@@ -54,15 +54,26 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
       return url ? { name, url } : { name };
     }
   }
-  const links = [...node.querySelectorAll<HTMLAnchorElement>('a[href]')];
+  const links = profileElements(node);
   const link = links.find((item) => {
-    const name = clean(item.textContent);
+    const name = profileElementName(item);
     const href = item.getAttribute('href') ?? '';
     return Boolean(name) && !/comment|reply|reaction|hashtag/i.test(href) && !/更多|回覆|讚|留言/.test(name);
   });
   if (!link) return undefined;
   const url = canonicalProfileUrl(link.getAttribute('href'));
-  return url ? { name: clean(link.textContent), url } : { name: clean(link.textContent) };
+  const name = profileElementName(link);
+  return url ? { name, url } : { name };
+}
+
+function profileElements(node: ParentNode): HTMLElement[] {
+  return [...node.querySelectorAll<HTMLElement>('a[href], [role="link"]')];
+}
+
+function profileElementName(node: HTMLElement): string {
+  const text = clean(node.textContent);
+  if (text) return text;
+  return clean(node.getAttribute('aria-label')).replace(/(?:的)?(?:個人檔案|大頭貼照|profile|profile picture)$/i, '').trim();
 }
 
 const semanticCommentSelector = '[data-comment-id], [aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]';
@@ -105,10 +116,10 @@ function commentNodes(root: ParentNode): Element[] {
 }
 
 function isPlausibleCommentContainer(node: Element): boolean {
-  const author = [...node.querySelectorAll<HTMLAnchorElement>('a[href]')]
-    .find((link) => Boolean(clean(link.textContent)) && Boolean(canonicalProfileUrl(link.getAttribute('href'))));
+  const author = profileElements(node)
+    .find((link) => Boolean(profileElementName(link)) && !/更多|回覆|讚|留言|查看/.test(profileElementName(link)));
   if (!author) return false;
-  const authorName = clean(author.textContent);
+  const authorName = profileElementName(author);
   return [...node.querySelectorAll<HTMLElement>('[dir="auto"], [lang], span')]
     .some((textNode) => {
       const text = clean(textNode.textContent);
@@ -137,8 +148,8 @@ function fallbackCommentThreadRoot(root: ParentNode): ParentNode | undefined {
   let candidate: Element | null = common;
   for (let depth = 0; candidate && depth < 8; depth += 1, candidate = candidate.parentElement) {
     if (candidate.matches('html, body, [role="feed"]')) break;
-    const hasPostAuthor = [...candidate.querySelectorAll<HTMLAnchorElement>('a[href]')]
-      .some((link) => !comments.some((comment) => comment.contains(link)) && Boolean(clean(link.textContent)) && Boolean(canonicalProfileUrl(link.getAttribute('href'))));
+    const hasPostAuthor = profileElements(candidate)
+      .some((link) => !comments.some((comment) => comment.contains(link)) && Boolean(profileElementName(link)) && !/更多|回覆|讚|留言|查看/.test(profileElementName(link)));
     if (hasPostAuthor) return candidate;
   }
   return common;
@@ -201,11 +212,11 @@ export function parseFacebookPost(
     const postArticle = [...scope.querySelectorAll('article, [role="article"]')]
       .find((article) => !commentSet.has(article) && Boolean(article.querySelector('a[href]')));
     const authorScope = postArticle ?? scope;
-    const profile = [...authorScope.querySelectorAll<HTMLAnchorElement>('a[href]')]
-      .find((link) => !nodes.some((comment) => comment.contains(link)) && Boolean(clean(link.textContent)) && Boolean(canonicalProfileUrl(link.getAttribute('href'))));
+    const profile = profileElements(authorScope)
+      .find((link) => !nodes.some((comment) => comment.contains(link)) && Boolean(profileElementName(link)) && !/更多|回覆|讚|留言|查看/.test(profileElementName(link)));
     if (profile) {
       const url = canonicalProfileUrl(profile.getAttribute('href'));
-      const name = clean(profile.textContent);
+      const name = profileElementName(profile);
       postAuthor = url ? { name, url } : { name };
     }
   }

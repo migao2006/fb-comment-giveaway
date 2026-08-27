@@ -5,6 +5,8 @@ export interface LoadingProgress {
   message: string;
 }
 
+export type LoadingEndReason = 'complete' | 'limit-reached' | 'root-lost' | 'aborted';
+
 const MORE_COMMENT_PATTERNS = [
   /^查看更多留言(?:（\d+）)?$/,
   /^顯示更多留言$/,
@@ -50,7 +52,7 @@ export async function loadMoreComments(
   getCommentCount: () => number,
   onProgress: (progress: LoadingProgress) => void,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<LoadingEndReason> {
   const maxRounds = 60;
   let settledBottomRounds = 0;
   let previousCount = getCommentCount();
@@ -58,7 +60,7 @@ export async function loadMoreComments(
   const clickedAtCount = new WeakMap<HTMLElement, number>();
 
   for (let round = 1; round <= maxRounds && !signal.aborted; round += 1) {
-    if (root instanceof Element && !root.isConnected) return;
+    if (root instanceof Element && !root.isConnected) return 'root-lost';
     const buttons = findMoreCommentButtons(root).filter((button) => clickedAtCount.get(button) !== previousCount).slice(0, 1);
     buttons.forEach((button) => { clickedAtCount.set(button, previousCount); button.click(); });
     window.scrollBy({ top: Math.max(window.innerHeight * 0.72, 460), behavior: 'smooth' });
@@ -78,6 +80,7 @@ export async function loadMoreComments(
     previousCount = currentCount;
     previousDocumentHeight = currentDocumentHeight;
     onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則主留言` });
-    if (settledBottomRounds >= 3) return;
+    if (settledBottomRounds >= 3) return 'complete';
   }
+  return signal.aborted ? 'aborted' : 'limit-reached';
 }

@@ -115,6 +115,18 @@ function mobileCommentRows(root: ParentNode): Element[] {
   return [...rows].filter((row) => ![...rows].some((nested) => nested !== row && row.contains(nested)));
 }
 
+function indentedMobileReplyRows(nodes: Element[]): Set<Element> {
+  const positioned = nodes.map((node) => {
+    const action = [...node.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]')]
+      .find(isMobileCommentAction);
+    const rect = action?.getBoundingClientRect();
+    return rect && rect.width > 0 ? { node, left: rect.left } : undefined;
+  }).filter((item): item is { node: Element; left: number } => Boolean(item));
+  if (positioned.length < 2) return new Set();
+  const mainColumn = Math.min(...positioned.map(({ left }) => left));
+  return new Set(positioned.filter(({ left }) => left >= mainColumn + 12).map(({ node }) => node));
+}
+
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
   clone.querySelectorAll(semanticCommentSelector).forEach((nested) => nested.remove());
@@ -264,6 +276,7 @@ export function parseFacebookPost(
   const seen = new Set<string>();
   const comments: FacebookComment[] = [];
   const replies: FacebookComment[] = [];
+  const indentedReplies = indentedMobileReplyRows(nodes);
 
   nodes.forEach((node, index) => {
     const author = findAuthor(node);
@@ -275,7 +288,7 @@ export function parseFacebookPost(
     const parentComment = node.parentElement?.closest('[data-comment-id]');
     const isReply = node.getAttribute('data-comment-depth') !== null
       ? Number(node.getAttribute('data-comment-depth')) > 0
-      : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '');
+      : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '') || indentedReplies.has(node);
     const timestampValue = timestamp?.getAttribute('datetime') || timestamp?.getAttribute('data-comment-time') || timestamp?.getAttribute('aria-label') || timestamp?.textContent;
     const createdAt = parseFacebookDate(timestampValue);
     const item: FacebookComment = {

@@ -132,6 +132,7 @@ function mount(): void {
     const beforeDataset = storeFingerprint(commentStore);
     const beforeAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
     if (mode === 'replace') commentStore.clear();
+    removeReclassifiedReplies(commentStore, current.comments, current.replies);
     snapshotEntries(current.comments).forEach(([key, comment]) => commentStore.set(key, comment));
     parsed = { ...current, comments: [...commentStore.values()] };
     const afterDataset = storeFingerprint(commentStore);
@@ -159,7 +160,7 @@ function mount(): void {
     loadButton.classList.add('hidden');
     stopButton.classList.remove('hidden');
     try {
-      await loadMoreComments(
+      const endReason = await loadMoreComments(
         postRoot,
         () => scan('載入中', 'accumulate', postRoot),
         (progress) => {
@@ -169,8 +170,10 @@ function mount(): void {
         },
         loadController.signal,
       );
-      loadOutcome = loadController.signal.aborted ? '使用者停止' : '自動停止';
-      scan(loadController.signal.aborted ? '已停止載入' : '載入結束');
+      loadOutcome = endReason === 'complete' ? '載入完成'
+        : endReason === 'limit-reached' ? '達到輪數上限'
+          : endReason === 'root-lost' ? '留言區已更新' : '使用者停止';
+      scan(loadOutcome);
     } finally {
       loadController = undefined;
       loadButton.classList.remove('hidden');
@@ -246,8 +249,15 @@ function mount(): void {
       return { pattern: safeLabelPattern(node.getAttribute('aria-label') ?? node.textContent ?? ''), visible: rect.width > 0 && rect.height > 0, top: Math.round(rect.top), height: Math.round(rect.height), expanded: node.getAttribute('aria-expanded') ?? '-', disabled: node.hasAttribute('disabled') || node.getAttribute('aria-disabled') === 'true' };
     });
     const details = {
-      diagnosticVersion: 3,
-      code: parsed.comments.length ? 'LOAD_INCOMPLETE' : 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '',
+      diagnosticVersion: 4,
+      code: !parsed.comments.length
+        ? 'POST_NOT_FOUND'
+        : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'
+          : loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
+            : loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
+              : loadOutcome === '留言區已更新' ? 'LOAD_ROOT_LOST'
+                : loadOutcome === '執行中' ? 'LOAD_RUNNING' : 'LOAD_NOT_ATTEMPTED',
+      message: parsed.diagnostics[0] ?? '',
       parsedComments: parsed.comments.length,
       parsedReplies: parsed.replies.length,
       loadingAttempted: hasLoadingAttempt,
@@ -318,10 +328,31 @@ function snapshotEntries(comments: FacebookComment[]): Array<[string, FacebookCo
   const occurrences = new Map<string, number>();
   return comments.map((comment) => {
     if (!comment.id.startsWith('rendered-')) return [comment.id, comment];
-    const fingerprint = `${comment.authorUrl ?? comment.authorName}\n${comment.body}\n${comment.createdAt ?? ''}`;
+    const fingerprint = commentFingerprint(comment);
     const occurrence = (occurrences.get(fingerprint) ?? 0) + 1;
     occurrences.set(fingerprint, occurrence);
     return [`rendered:${fingerprint}\n#${occurrence}`, comment];
+  });
+}
+
+function commentFingerprint(comment: FacebookComment): string {
+  return `${comment.authorUrl ?? comment.authorName}\n${comment.body}\n${comment.createdAt ?? ''}`;
+}
+
+function removeReclassifiedReplies(
+  store: Map<string, FacebookComment>,
+  currentComments: FacebookComment[],
+  currentReplies: FacebookComment[],
+): void {
+  const currentMainCounts = new Map<string, number>();
+  currentComments.forEach((comment) => {
+    const fingerprint = commentFingerprint(comment);
+    currentMainCounts.set(fingerprint, (currentMainCounts.get(fingerprint) ?? 0) + 1);
+  });
+  currentReplies.forEach((reply) => {
+    const fingerprint = commentFingerprint(reply);
+    const matching = [...store].filter(([, comment]) => commentFingerprint(comment) === fingerprint);
+    if (matching.length > (currentMainCounts.get(fingerprint) ?? 0)) store.delete(matching.at(-1)![0]);
   });
 }
 

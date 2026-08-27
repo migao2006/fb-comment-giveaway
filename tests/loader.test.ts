@@ -15,10 +15,10 @@ describe('loadMoreComments', () => {
     const target = document.createElement('article');
     const targetButton = document.createElement('button');
     targetButton.textContent = '查看更多留言';
-    targetButton.getBoundingClientRect = () => ({ width: 100, height: 40 } as DOMRect);
+    targetButton.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
     const unrelated = document.createElement('button');
     unrelated.textContent = '查看更多留言';
-    unrelated.getBoundingClientRect = () => ({ width: 100, height: 40 } as DOMRect);
+    unrelated.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
     const targetClick = vi.fn();
     const unrelatedClick = vi.fn();
     targetButton.addEventListener('click', targetClick);
@@ -34,14 +34,14 @@ describe('loadMoreComments', () => {
     expect(unrelatedClick).not.toHaveBeenCalled();
   });
 
-  it('uses iPhone aria labels and can click the same control again after progress', async () => {
+  it('repeats only a visible button with explicit safe text after progress', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     const target = document.createElement('article');
     const button = document.createElement('div');
     button.setAttribute('role', 'button');
-    button.setAttribute('aria-label', '還有更多內容，按兩下即可查看留言');
-    button.getBoundingClientRect = () => ({ width: 100, height: 40 } as DOMRect);
+    button.textContent = '查看更多留言';
+    button.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
     let count = 17;
     let clicks = 0;
     button.addEventListener('click', () => {
@@ -56,5 +56,22 @@ describe('loadMoreComments', () => {
     await operation;
     expect(clicks).toBe(3);
     expect(count).toBe(37);
+  });
+  it('never clicks an aria-only 查看留言 control that may open the reactions list', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const unsafe = document.createElement('div');
+    unsafe.setAttribute('role', 'button');
+    unsafe.setAttribute('aria-label', '59 人，按兩下即可查看留言');
+    unsafe.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
+    const clicked = vi.fn();
+    unsafe.addEventListener('click', clicked);
+    root.append(unsafe);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 7, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(clicked).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,59 @@
+import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
+import { canonicalProfileUrl, findFacebookPostRoot, parseFacebookPost } from '../src/parser';
+
+const fixture = readFileSync(new URL('./fixtures/facebook-comments.html', import.meta.url), 'utf8');
+describe('parseFacebookPost', () => {
+  it('parses rendered traditional-Chinese comments without generated classes', () => {
+    const result = parseFacebookPost(new JSDOM(fixture, { url: 'https://www.facebook.com/post/1' }).window.document);
+    expect(result.postAuthor?.name).toBe('抽獎主辦人');
+    expect(result.comments.map((item) => item.id)).toEqual(['c1', 'c2', 'c4']);
+    expect(result.replies).toHaveLength(1);
+    expect(result.comments[0]!).toMatchObject({ authorName: '王小明', body: '我要參加 #抽獎', kind: 'comment' });
+    expect(result.comments[0]!.authorUrl).toBe('https://facebook.com/alice');
+    expect(result.comments[1]!.createdAt).toContain('2026-08-21');
+  });
+  it('infers a post author from the outer post article when no marker exists', () => {
+    const document = new JSDOM('<article data-post-id="post"><header><a href="https://www.facebook.com/profile.php?id=8&ref=feed#x">粉專</a></header><article data-comment-id="c"><a href="/a">留言者</a><span dir="auto">參加</span></article></article>').window.document;
+    expect(parseFacebookPost(document).postAuthor).toEqual({ name: '粉專', url: 'https://facebook.com/profile.php?id=8' });
+    expect(canonicalProfileUrl('https://www.facebook.com/alice/?ref=bookmarks#part')).toBe('https://facebook.com/alice');
+  });
+  it('isolates one post and keeps nested reply text out of the main comment body', () => {
+    const html = `
+      <main>
+        <div role="article"><a href="/small-host">小貼文</a>
+          <div role="article" aria-label="甲的留言"><a href="/a">甲</a><span dir="auto">別篇留言</span></div>
+        </div>
+        <div role="article"><a href="/target-host">目標貼文</a><a href="/posts/target">貼文時間</a>
+          <div role="article" aria-label="乙的留言"><a href="/b">乙</a><span dir="auto">參加</span>
+            <div role="article" aria-label="丙的回覆"><a href="/c">丙</a><span dir="auto">這是非常非常長的回覆文字</span></div>
+          </div>
+          <div role="article" aria-label="丁的留言"><a href="/d">丁</a><span dir="auto">也參加</span></div>
+        </div>
+      </main>`;
+    const result = parseFacebookPost(new JSDOM(html, { url: 'https://facebook.com/posts/target' }).window.document, 'https://facebook.com/posts/target');
+    expect(result.postAuthor?.name).toBe('目標貼文');
+    expect(result.comments.map((comment) => comment.body)).toEqual(['參加', '也參加']);
+    expect(result.comments.some((comment) => comment.body.includes('回覆文字'))).toBe(false);
+  });
+  it('rejects non-Facebook and known non-profile links as participant identities', () => {
+    expect(canonicalProfileUrl('https://example.com/alice')).toBeUndefined();
+    expect(canonicalProfileUrl('https://facebook.com/groups/123')).toBeUndefined();
+    expect(canonicalProfileUrl('https://facebook.com/groups/123/user/456/?ref=group')).toBe('https://facebook.com/profile.php?id=456');
+  });
+  it('refuses to guess among posts and matches important permalink query IDs', () => {
+    const html = `<main>
+      <article><a href="/story.php?story_fbid=wrong&id=8">熱門貼文</a>
+        <article aria-label="甲的留言"><a href="/a">甲</a><span dir="auto">1</span></article>
+        <article aria-label="乙的留言"><a href="/b">乙</a><span dir="auto">2</span></article>
+      </article>
+      <article><a href="/story.php?story_fbid=target&id=8">目標貼文</a>
+        <article aria-label="丙的留言"><a href="/c">丙</a><span dir="auto">3</span></article>
+      </article>
+    </main>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/story.php?story_fbid=target&id=8' }).window.document;
+    expect(findFacebookPostRoot(document, 'https://facebook.com/story.php?story_fbid=target&id=8')?.querySelector('a')?.textContent).toBe('目標貼文');
+    expect(findFacebookPostRoot(document, 'https://facebook.com/story.php?story_fbid=missing&id=8')).toBeUndefined();
+  });
+});

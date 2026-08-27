@@ -1,0 +1,54 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const post = (id: string, participant: string) => `
+  <article data-post-id="${id}">
+    <header data-post-author><a href="/host">主辦人</a></header>
+    <article data-comment-id="${id}-comment">
+      <a data-comment-author href="/${participant}">${participant}</a>
+      <span data-comment-body>${participant} 要參加</span>
+    </article>
+  </article>`;
+
+describe('bookmarklet UI', () => {
+  beforeEach(() => {
+    document.querySelector('#fb-comment-giveaway-bookmarklet')?.remove();
+    document.body.innerHTML = post('one', '甲');
+    history.replaceState({}, '', '/posts/fixture-one');
+    vi.resetModules();
+  });
+
+  it('mounts once and resets accumulated comments after Facebook SPA navigation', async () => {
+    await import('../src/bookmarklet');
+    const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
+    expect(host).toBeTruthy();
+    expect(host.shadowRoot!.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
+
+    document.body.innerHTML = post('two', '乙');
+    history.pushState({}, '', '/posts/fixture-two');
+    vi.resetModules();
+    await import('../src/bookmarklet');
+
+    expect(document.querySelectorAll('#fb-comment-giveaway-bookmarklet')).toHaveLength(1);
+    expect(host.shadowRoot!.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
+    expect(host.shadowRoot!.querySelector('[data-candidates]')!.textContent).toContain('主辦人');
+  });
+  it('keeps duplicate-looking rendered comments as distinct records', async () => {
+    document.body.innerHTML = `<article data-post-id="same"><a href="/host">主辦人</a>
+      <article aria-label="甲的留言"><a href="/a">甲</a><span dir="auto">參加</span></article>
+      <article aria-label="甲的留言"><a href="/a">甲</a><span dir="auto">參加</span></article>
+    </article>`;
+    await import('../src/bookmarklet');
+    const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
+    expect(host.shadowRoot!.querySelector('[data-stat="comments"]')!.textContent).toBe('2');
+  });
+  it('refuses to draw an old list after SPA navigation without reactivation', async () => {
+    await import('../src/bookmarklet');
+    const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
+    document.body.innerHTML = post('new', '新參加者');
+    history.pushState({}, '', '/posts/new');
+    (host.shadowRoot!.querySelector('[data-action="draw"]') as HTMLButtonElement).click();
+    expect(host.shadowRoot!.querySelector('[data-status]')!.textContent).toContain('切換貼文');
+    expect(host.shadowRoot!.querySelector('[data-results]')!.classList.contains('hidden')).toBe(true);
+  });
+});

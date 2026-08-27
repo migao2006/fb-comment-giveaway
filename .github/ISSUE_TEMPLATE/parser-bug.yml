@@ -1,0 +1,43 @@
+name: Facebook 留言解析問題
+description: Facebook 改版後找不到留言、作者或時間
+title: "[解析問題] "
+labels: [parser]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        請勿貼上 Cookie、Access Token、密碼、完整頁面 HTML 或未遮蔽的個人資料。公開 issue 中的內容所有人都看得到。
+  - type: dropdown
+    id: device
+    attributes:
+      label: 裝置與瀏覽器
+      options:
+        - iPhone Safari
+        - iPad Safari
+        - Android 瀏覽器
+        - 桌面瀏覽器
+    validations:
+      required: true
+  - type: dropdown
+    id: post-type
+    attributes:
+      label: 貼文類型
+      options:
+        - 一般使用者貼文
+        - 粉絲專頁一般貼文
+        - 社團一般貼文
+        - Reels／直播／相片檢視器（目前未正式支援）
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期與實際結果
+      description: 請描述頁面約有幾則留言，以及工具顯示的數量或錯誤訊息。
+    validations:
+      required: true
+  - type: textarea
+    id: safe-details
+    attributes:
+      label: 已去識別的補充資訊
+      description: 可附上遮蔽姓名、頭像、留言及網址後的截圖。

@@ -40,6 +40,7 @@ function mount(): void {
         <button class="button danger hidden" data-action="stop">停止</button>
       </section>
       <p class="status" data-status aria-live="polite">準備掃描目前頁面…</p>
+      <div class="diagnostic-row"><button class="diagnostic-link" data-action="copy-load-diagnostic">複製載入診斷</button><span data-load-copy-state></span></div>
       <section class="error-card hidden" data-error role="alert">
         <strong>找不到 Facebook 留言</strong><p data-error-message></p><code>錯誤代碼：POST_NOT_FOUND</code>
         <div><button class="button error-button" data-action="copy-diagnostic">複製診斷資訊</button><span data-copy-state></span></div>
@@ -78,6 +79,8 @@ function mount(): void {
   let lastSnapshot: { result: RaffleResult; proof: RaffleProof; filters: RaffleFilters; sourcePage: string; postAuthor: ParsedFacebookPost['postAuthor'] } | undefined;
   let loadController: AbortController | undefined;
   let hasLoadingAttempt = false;
+  let loadOutcome = '尚未執行';
+  const loadHistory: Array<{ round: number; clicked: number; commentCount: number; message: string }> = [];
 
   const query = <T extends Element>(selector: string) => shadow.querySelector<T>(selector)!;
   const status = query<HTMLElement>('[data-status]');
@@ -150,15 +153,22 @@ function mount(): void {
     }
     loadController = new AbortController();
     hasLoadingAttempt = true;
+    loadOutcome = '執行中';
+    loadHistory.length = 0;
     loadButton.classList.add('hidden');
     stopButton.classList.remove('hidden');
     try {
       await loadMoreComments(
         postRoot,
         () => scan('載入中', 'accumulate', postRoot),
-        (progress) => { status.textContent = `${progress.message}（第 ${progress.round} 輪）`; },
+        (progress) => {
+          status.textContent = `${progress.message}（第 ${progress.round} 輪）`;
+          loadHistory.push({ ...progress });
+          if (loadHistory.length > 80) loadHistory.shift();
+        },
         loadController.signal,
       );
+      loadOutcome = loadController.signal.aborted ? '使用者停止' : '自動停止';
       scan(loadController.signal.aborted ? '已停止載入' : '載入結束');
     } finally {
       loadController = undefined;
@@ -226,9 +236,25 @@ function mount(): void {
     const labelNodes = [...document.querySelectorAll<HTMLElement>('[aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]')];
     const labelPatterns = [...new Set(labelNodes.map((node) => `${node.tagName.toLowerCase()}[role=${node.getAttribute('role') ?? '-'}] ${safeLabelPattern(node.getAttribute('aria-label') ?? '')}`))].slice(0, 12);
     const roleLinkNodes = [...document.querySelectorAll<HTMLElement>('[role="link"]')];
+    const scrollContainers = [...document.querySelectorAll<HTMLElement>('body *')]
+      .filter((node) => node.scrollHeight > node.clientHeight + 80)
+      .slice(0, 20)
+      .map((node) => ({ tag: node.tagName.toLowerCase(), role: node.getAttribute('role') ?? '-', clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, scrollTop: Math.round(node.scrollTop), overflowY: getComputedStyle(node).overflowY, commentSignals: node.querySelectorAll('[aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]').length }));
+    const commentControls = labelNodes.filter((node) => node.matches('button, [role="button"]')).slice(0, 30).map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { pattern: safeLabelPattern(node.getAttribute('aria-label') ?? node.textContent ?? ''), visible: rect.width > 0 && rect.height > 0, top: Math.round(rect.top), height: Math.round(rect.height), expanded: node.getAttribute('aria-expanded') ?? '-', disabled: node.hasAttribute('disabled') || node.getAttribute('aria-disabled') === 'true' };
+    });
     const details = {
-      diagnosticVersion: 2,
-      code: 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '',
+      diagnosticVersion: 3,
+      code: parsed.comments.length ? 'LOAD_INCOMPLETE' : 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '',
+      parsedComments: parsed.comments.length,
+      parsedReplies: parsed.replies.length,
+      loadingAttempted: hasLoadingAttempt,
+      loadOutcome,
+      loadHistory,
+      windowScroll: { x: Math.round(scrollX), y: Math.round(scrollY), innerHeight, documentHeight: document.documentElement.scrollHeight, bodyHeight: document.body?.scrollHeight ?? 0 },
+      scrollContainers,
+      commentControls,
       articles: document.querySelectorAll('article').length,
       roleArticles: document.querySelectorAll('[role="article"]').length,
       anchors: document.querySelectorAll('a').length,
@@ -242,7 +268,7 @@ function mount(): void {
       mainElements: document.querySelectorAll('main, [role="main"]').length,
       language: document.documentElement.lang || 'unknown', browser: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}`,
     };
-    const state = query<HTMLElement>('[data-copy-state]');
+    const state = query<HTMLElement>('[data-load-copy-state]');
     try { await navigator.clipboard.writeText(JSON.stringify(details, null, 2)); state.textContent = '已複製'; }
     catch { state.textContent = '複製失敗，請截圖錯誤代碼'; }
   }
@@ -261,6 +287,7 @@ function mount(): void {
     if (action === 'stop') loadController?.abort();
     if (action === 'draw') void draw();
     if (action === 'copy-diagnostic') void copyDiagnostic();
+    if (action === 'copy-load-diagnostic') void copyDiagnostic();
     if (action === 'proof' && lastSnapshot && ensureCurrentPage()) downloadJson('fb-giveaway-record.json', lastSnapshot.proof);
     if (action === 'full-export' && lastSnapshot && ensureCurrentPage() && confirm('完整名單包含姓名、留言與個人頁連結。確定要下載到這台裝置嗎？')) {
       downloadJson('fb-giveaway-full-list.json', {
@@ -346,5 +373,5 @@ function downloadJson(filename: string, value: unknown): void {
 function panelStyles(): string { return `<style>
 :host{all:initial;position:fixed;z-index:2147483647;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#19201e}
 :host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{display:flex;flex-direction:column;gap:4px;background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.notice span{color:#69716d}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}.footer-note{margin:13px 4px 0;color:#777e7a;font-size:10px;line-height:1.45}
-.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}@media(max-width:520px){:host{left:10px;right:10px}.panel{width:100%;max-height:calc(100dvh - 20px)}.form-grid{gap:8px}.body{padding:12px}}
+.diagnostic-row{display:flex;align-items:center;gap:8px;margin:-5px 2px 10px}.diagnostic-link{border:0;background:transparent;color:#174f3f;padding:3px 0;text-decoration:underline;font:700 11px sans-serif}.diagnostic-row span{font-size:10px;color:#59625e}.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}@media(max-width:520px){:host{left:10px;right:10px}.panel{width:100%;max-height:calc(100dvh - 20px)}.form-grid{gap:8px}.body{padding:12px}}
 </style>`; }

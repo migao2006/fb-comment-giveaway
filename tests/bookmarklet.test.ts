@@ -58,4 +58,9 @@ describe('bookmarklet UI', () => {
     expect(error.classList.contains('hidden')).toBe(false);
     expect(error.textContent).toContain('POST_NOT_FOUND');
   });
+  it('always exposes the partial-loading diagnostic action', async () => {
+    await import('../src/bookmarklet');
+    const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
+    expect(host.shadowRoot!.querySelector('[data-action="copy-load-diagnostic"]')).toBeTruthy();
+  });
 });

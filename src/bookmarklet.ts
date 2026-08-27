@@ -77,6 +77,7 @@ function mount(): void {
   const commentStore = new Map<string, ParsedFacebookPost['comments'][number]>();
   let lastSnapshot: { result: RaffleResult; proof: RaffleProof; filters: RaffleFilters; sourcePage: string; postAuthor: ParsedFacebookPost['postAuthor'] } | undefined;
   let loadController: AbortController | undefined;
+  let hasLoadingAttempt = false;
 
   const query = <T extends Element>(selector: string) => shadow.querySelector<T>(selector)!;
   const status = query<HTMLElement>('[data-status]');
@@ -148,6 +149,7 @@ function mount(): void {
       return;
     }
     loadController = new AbortController();
+    hasLoadingAttempt = true;
     loadButton.classList.add('hidden');
     stopButton.classList.remove('hidden');
     try {
@@ -191,6 +193,7 @@ function mount(): void {
 
   async function draw(): Promise<void> {
     if (!ensureCurrentPage()) return;
+    if (!hasLoadingAttempt && !confirm(`目前只包含頁面已載入的 ${parsed.comments.length} 則主留言，尚未執行「繼續載入留言」。仍要直接抽獎嗎？`)) return;
     const winnerCount = clampNumber(query<HTMLInputElement>('[name="winnerCount"]').value, 1, 100);
     const alternateCount = clampNumber(query<HTMLInputElement>('[name="alternateCount"]').value, 0, 100);
     const filters = currentFilters();

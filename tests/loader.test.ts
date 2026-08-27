@@ -33,4 +33,28 @@ describe('loadMoreComments', () => {
     expect(targetClick).toHaveBeenCalledTimes(1);
     expect(unrelatedClick).not.toHaveBeenCalled();
   });
+
+  it('uses iPhone aria labels and can click the same control again after progress', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const target = document.createElement('article');
+    const button = document.createElement('div');
+    button.setAttribute('role', 'button');
+    button.setAttribute('aria-label', '還有更多內容，按兩下即可查看留言');
+    button.getBoundingClientRect = () => ({ width: 100, height: 40 } as DOMRect);
+    let count = 17;
+    let clicks = 0;
+    button.addEventListener('click', () => {
+      clicks += 1;
+      if (clicks <= 2) count += 10;
+      else button.remove();
+    });
+    target.append(button);
+    document.body.append(target);
+    const operation = loadMoreComments(target, () => count, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(clicks).toBe(3);
+    expect(count).toBe(37);
+  });
 });

@@ -15,6 +15,7 @@ const MORE_COMMENT_PATTERNS = [
 ];
 
 const textOf = (element: Element) => (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+const accessibleTextOf = (element: Element) => `${element.getAttribute('aria-label') ?? ''} ${textOf(element)}`.replace(/\s+/g, ' ').trim();
 
 function isVisible(element: HTMLElement): boolean {
   const style = getComputedStyle(element);
@@ -26,9 +27,10 @@ function findMoreCommentButtons(root: ParentNode): HTMLElement[] {
   const candidates = root.querySelectorAll<HTMLElement>('button, [role="button"]');
   return [...candidates].filter((element) => {
     const text = textOf(element);
+    const accessibleText = accessibleTextOf(element);
     return isVisible(element)
-      && MORE_COMMENT_PATTERNS.some((pattern) => pattern.test(text))
-      && !/回覆/.test(text);
+      && (MORE_COMMENT_PATTERNS.some((pattern) => pattern.test(text)) || /(?:查看|更多|先前|其他|顯示).{0,16}留言/.test(accessibleText))
+      && !/(?:撰寫|新增|發表|輸入|回覆|按讚).{0,8}留言/.test(accessibleText);
   });
 }
 
@@ -53,12 +55,14 @@ export async function loadMoreComments(
   const maxRounds = 40;
   let stagnantRounds = 0;
   let previousCount = getCommentCount();
-  const clicked = new WeakSet<HTMLElement>();
+  const clickedAtCount = new WeakMap<HTMLElement, number>();
 
   for (let round = 1; round <= maxRounds && !signal.aborted; round += 1) {
     if (root instanceof Element && !root.isConnected) return;
-    const buttons = findMoreCommentButtons(root).filter((button) => !clicked.has(button)).slice(0, 3);
-    buttons.forEach((button) => { clicked.add(button); button.click(); });
+    const buttons = findMoreCommentButtons(root).filter((button) => clickedAtCount.get(button) !== previousCount).slice(0, 1);
+    buttons.forEach((button) => { clickedAtCount.set(button, previousCount); button.click(); });
+    const lastCommentSignal = [...root.querySelectorAll<HTMLElement>('[aria-label*="留言"], [aria-label*="Comment"]')].at(-1);
+    lastCommentSignal?.scrollIntoView?.({ behavior: 'smooth', block: 'end' });
     window.scrollBy({ top: Math.max(window.innerHeight * 0.72, 460), behavior: 'smooth' });
     onProgress({
       round,

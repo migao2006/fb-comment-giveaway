@@ -117,9 +117,9 @@ function mobileCommentRows(root: ParentNode): Element[] {
 
 function indentedMobileReplyRows(nodes: Element[]): Set<Element> {
   const positioned = nodes.map((node) => {
-    const action = [...node.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]')]
-      .find(isMobileCommentAction);
-    const rect = action?.getBoundingClientRect();
+    const authorText = [...node.querySelectorAll<HTMLElement>('[dir="auto"]')]
+      .find((item) => !item.querySelector('[dir="auto"]') && !commentActionText.test(clean(item.textContent)));
+    const rect = authorText?.getBoundingClientRect();
     return rect && rect.width > 0 ? { node, left: rect.left } : undefined;
   }).filter((item): item is { node: Element; left: number } => Boolean(item));
   if (positioned.length < 2) return new Set();
@@ -276,7 +276,7 @@ export function parseFacebookPost(
   const seen = new Set<string>();
   const comments: FacebookComment[] = [];
   const replies: FacebookComment[] = [];
-  const indentedReplies = indentedMobileReplyRows(nodes);
+  const inferredReplies = indentedMobileReplyRows(nodes);
 
   nodes.forEach((node, index) => {
     const author = findAuthor(node);
@@ -288,7 +288,7 @@ export function parseFacebookPost(
     const parentComment = node.parentElement?.closest('[data-comment-id]');
     const isReply = node.getAttribute('data-comment-depth') !== null
       ? Number(node.getAttribute('data-comment-depth')) > 0
-      : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '') || indentedReplies.has(node);
+      : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '') || inferredReplies.has(node);
     const timestampValue = timestamp?.getAttribute('datetime') || timestamp?.getAttribute('data-comment-time') || timestamp?.getAttribute('aria-label') || timestamp?.textContent;
     const createdAt = parseFacebookDate(timestampValue);
     const item: FacebookComment = {

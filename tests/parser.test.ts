@@ -126,14 +126,15 @@ describe('parseFacebookPost', () => {
 
   it('classifies indented iPhone rows as replies instead of main comments', () => {
     const html = `<div><a href="/host">作者</a><section>
-      <div class="row"><span dir="auto">甲</span><span dir="auto">主留言</span><div id="main-action" role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
-      <div class="row"><span dir="auto">乙</span><span dir="auto">這是回覆</span><div id="reply-action" role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
+      <div class="row"><span id="main-author" dir="auto">甲</span><span dir="auto">主留言</span><div role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
+      <div class="row"><span id="reply-author" dir="auto">乙</span><span dir="auto">這是回覆</span><div role="button" aria-label="留言操作，按兩下即可按讚"></div></div>
     </section></div>`;
     const document = new JSDOM(html, { url: 'https://facebook.com/posts/indented-reply' }).window.document;
-    document.querySelector<HTMLElement>('#main-action')!.getBoundingClientRect = () => ({ left: 20, width: 100 } as DOMRect);
-    document.querySelector<HTMLElement>('#reply-action')!.getBoundingClientRect = () => ({ left: 52, width: 100 } as DOMRect);
+    document.querySelector<HTMLElement>('#main-author')!.getBoundingClientRect = () => ({ left: 20, width: 100 } as DOMRect);
+    document.querySelector<HTMLElement>('#reply-author')!.getBoundingClientRect = () => ({ left: 52, width: 100 } as DOMRect);
     const result = parseFacebookPost(document, 'https://facebook.com/posts/indented-reply');
     expect(result.comments).toMatchObject([{ authorName: '甲', body: '主留言', kind: 'comment' }]);
     expect(result.replies).toMatchObject([{ authorName: '乙', body: '這是回覆', kind: 'reply' }]);
   });
+
 });

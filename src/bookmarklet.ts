@@ -248,8 +248,19 @@ function mount(): void {
       const rect = node.getBoundingClientRect();
       return { pattern: safeLabelPattern(node.getAttribute('aria-label') ?? node.textContent ?? ''), visible: rect.width > 0 && rect.height > 0, top: Math.round(rect.top), height: Math.round(rect.height), expanded: node.getAttribute('aria-expanded') ?? '-', disabled: node.hasAttribute('disabled') || node.getAttribute('aria-disabled') === 'true' };
     });
+    const mobileRowGeometry = labelNodes
+      .filter((node) => node.matches('button, [role="button"]') && /^留言.+按.+按/u.test((node.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim()))
+      .slice(0, 60)
+      .map((node) => {
+        const row = node.parentElement;
+        const textRects = row ? [...row.querySelectorAll<HTMLElement>('[dir="auto"]')]
+          .filter((item) => !item.querySelector('[dir="auto"]')).slice(0, 3)
+          .map((item) => { const rect = item.getBoundingClientRect(); return { left: Math.round(rect.left), width: Math.round(rect.width) }; }) : [];
+        const rect = node.getBoundingClientRect();
+        return { actionLeft: Math.round(rect.left), actionWidth: Math.round(rect.width), textRects };
+      });
     const details = {
-      diagnosticVersion: 4,
+      diagnosticVersion: 5,
       code: !parsed.comments.length
         ? 'POST_NOT_FOUND'
         : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'
@@ -266,6 +277,7 @@ function mount(): void {
       windowScroll: { x: Math.round(scrollX), y: Math.round(scrollY), innerHeight, documentHeight: document.documentElement.scrollHeight, bodyHeight: document.body?.scrollHeight ?? 0 },
       scrollContainers,
       commentControls,
+      mobileRowGeometry,
       articles: document.querySelectorAll('article').length,
       roleArticles: document.querySelectorAll('[role="article"]').length,
       anchors: document.querySelectorAll('a').length,

@@ -4,7 +4,7 @@ import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from 
 import type { FacebookComment, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.2.2';
+const TOOL_VERSION = '0.2.3';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -36,6 +36,7 @@ function mount(): void {
         <div><strong data-stat="participants">0</strong><span>參加者</span></div>
         <div><strong data-stat="duplicates">0</strong><span>重複留言者</span></div>
       </section>
+      <p class="coverage hidden" data-coverage></p>
       <section class="load-row">
         <button class="button secondary" data-action="scan">重新掃描</button>
         <button class="button primary" data-action="load">繼續載入留言</button>
@@ -83,6 +84,7 @@ function mount(): void {
   let loadController: AbortController | undefined;
   let hasLoadingAttempt = false;
   let loadOutcome = '尚未執行';
+  let reportedCommentTotal: number | undefined;
   const loadHistory: Array<{ round: number; clicked: number; commentCount: number; message: string }> = [];
 
   const query = <T extends Element>(selector: string) => shadow.querySelector<T>(selector)!;
@@ -116,6 +118,13 @@ function mount(): void {
     query<HTMLElement>('[data-stat="replies"]').textContent = String(parsed.replies.length);
     query<HTMLElement>('[data-stat="participants"]').textContent = String(allAuthors.length);
     query<HTMLElement>('[data-stat="duplicates"]').textContent = String(duplicatePeople);
+    const parsedTotal = parsed.comments.length + parsed.replies.length;
+    const coverage = query<HTMLElement>('[data-coverage]');
+    const missingFromReported = reportedCommentTotal ? Math.max(0, reportedCommentTotal - parsedTotal) : 0;
+    coverage.classList.toggle('hidden', reportedCommentTotal === undefined);
+    coverage.classList.toggle('partial', missingFromReported > 0);
+    coverage.textContent = reportedCommentTotal === undefined ? ''
+      : `Facebook 顯示 ${reportedCommentTotal} 則 · 已讀取 ${parsedTotal} 則${missingFromReported ? ` · 尚差 ${missingFromReported} 則` : ' · 數量一致'}`;
     const missingDates = (filters.startDate || filters.endDate) ? parsed.comments.filter((comment) => !comment.createdAt).length : 0;
     query<HTMLElement>('[data-candidates]').textContent = `符合條件：${eligible.length} 個抽獎資格${parsed.postAuthor ? ` · 貼文作者：${parsed.postAuthor.name}` : ''}${missingDates ? ` · ${missingDates} 則無時間已排除` : ''}${missingProfiles ? ` · ${missingProfiles} 則缺個人頁連結，無法帳號去重` : ''}`;
     drawButton.disabled = eligible.length === 0;
@@ -131,6 +140,7 @@ function mount(): void {
       invalidateResult();
       mode = 'replace';
     }
+    reportedCommentTotal = findReportedCommentTotal(document) ?? reportedCommentTotal;
     const current = parseFacebookPost(root, activePage);
     const beforeDataset = storeFingerprint(commentStore);
     const beforeAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
@@ -262,12 +272,16 @@ function mount(): void {
         const rect = node.getBoundingClientRect();
         return { actionLeft: Math.round(rect.left), actionWidth: Math.round(rect.width), textRects };
       });
+    const detectedTotal = findReportedCommentTotal(document) ?? reportedCommentTotal;
+    const parsedTotal = parsed.comments.length + parsed.replies.length;
+    const reportedGap = detectedTotal ? Math.max(0, detectedTotal - parsedTotal) : 0;
     const details = {
       diagnosticVersion: 5,
       toolVersion: TOOL_VERSION,
       code: !parsed.comments.length
         ? 'POST_NOT_FOUND'
-        : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'
+        : loadOutcome === '載入完成' && reportedGap > 0 ? 'LOAD_PARTIAL'
+          : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'
           : loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
             : loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
               : loadOutcome === '留言區已更新' ? 'LOAD_ROOT_LOST'
@@ -275,6 +289,9 @@ function mount(): void {
       message: parsed.diagnostics[0] ?? '',
       parsedComments: parsed.comments.length,
       parsedReplies: parsed.replies.length,
+      parsedTotal,
+      reportedCommentTotal: detectedTotal ?? null,
+      reportedGap,
       loadingAttempted: hasLoadingAttempt,
       loadOutcome,
       loadHistory,
@@ -399,6 +416,16 @@ function roleCounts(): Record<string, number> {
   return counts;
 }
 
+function findReportedCommentTotal(root: ParentNode): number | undefined {
+  const totals = [...root.querySelectorAll<HTMLElement>('[aria-label]')]
+    .map((node) => (node.getAttribute('aria-label') ?? '').replace(/\s+/g, ' '))
+    .map((label) => label.match(/(\d[\d,.]*)\s*則?留言(?:，|。|$)/u)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Number.parseInt(value.replace(/[,.]/g, ''), 10))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return totals.length ? Math.max(...totals) : undefined;
+}
+
 function clampNumber(value: string, minimum: number, maximum: number): number {
   const parsed = Number.parseInt(value, 10);
   return Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : minimum));
@@ -420,6 +447,6 @@ function downloadJson(filename: string, value: unknown): void {
 
 function panelStyles(): string { return `<style>
 :host{all:initial;position:fixed;z-index:2147483647;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#19201e}
-:host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{display:flex;flex-direction:column;gap:4px;background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.notice span{color:#69716d}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}.footer-note{margin:13px 4px 0;color:#777e7a;font-size:10px;line-height:1.45}
+:host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{display:flex;flex-direction:column;gap:4px;background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.notice span{color:#69716d}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.coverage{margin:-4px 0 12px;padding:8px 10px;border-radius:9px;background:#e7f2ed;color:#174f3f;font:700 11px/1.4 sans-serif}.coverage.partial{background:#fff0d8;color:#7a4b00}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}.footer-note{margin:13px 4px 0;color:#777e7a;font-size:10px;line-height:1.45}
 .diagnostic-row{display:flex;align-items:center;gap:8px;margin:-5px 2px 10px}.diagnostic-link{border:0;background:transparent;color:#174f3f;padding:3px 0;text-decoration:underline;font:700 11px sans-serif}.diagnostic-row span{font-size:10px;color:#59625e}.bottom-diagnostic{display:flex;align-items:center;gap:8px;margin-top:12px}.bottom-diagnostic button{min-height:44px}.bottom-diagnostic span{font-size:10px;color:#59625e}.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}@media(max-width:520px){:host{left:10px;right:10px}.panel{width:100%;max-height:calc(100dvh - 20px)}.form-grid{gap:8px}.body{padding:12px}}
 </style>`; }

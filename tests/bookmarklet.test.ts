@@ -73,6 +73,15 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
     expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.2.2');
+    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.2.3');
+  });
+
+  it('shows the difference from Facebook reported total', async () => {
+    document.body.innerHTML = `<article><a href="/host">主辦人</a><div role="button" aria-label="167 則留言，按兩下即可查看留言"></div>
+      <article data-comment-id="main"><a href="/a">甲</a><span dir="auto">參加</span></article></article>`;
+    await import('../src/bookmarklet');
+    const coverage = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-coverage]')!;
+    expect(coverage.textContent).toContain('Facebook 顯示 167 則');
+    expect(coverage.textContent).toContain('尚差 166 則');
   });
 });

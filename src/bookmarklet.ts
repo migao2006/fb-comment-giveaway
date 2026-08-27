@@ -4,6 +4,7 @@ import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from 
 import type { FacebookComment, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
+const TOOL_VERSION = '0.2.1';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -24,7 +25,7 @@ function mount(): void {
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `${panelStyles()}<aside class="panel" role="dialog" aria-label="FB 留言抽獎助手">
     <header class="header">
-      <div><span class="badge">本機執行</span><h1>FB 留言抽獎</h1></div>
+      <div><span class="badge">本機執行 · v${TOOL_VERSION}</span><h1>FB 留言抽獎</h1></div>
       <div class="header-actions"><button class="icon" data-action="collapse" aria-label="收合面板">−</button><button class="icon" data-action="close" aria-label="關閉面板">×</button></div>
     </header>
     <div class="body">
@@ -263,6 +264,7 @@ function mount(): void {
       });
     const details = {
       diagnosticVersion: 5,
+      toolVersion: TOOL_VERSION,
       code: !parsed.comments.length
         ? 'POST_NOT_FOUND'
         : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'

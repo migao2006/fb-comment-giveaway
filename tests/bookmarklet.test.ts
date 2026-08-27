@@ -61,6 +61,6 @@ describe('bookmarklet UI', () => {
   it('always exposes the partial-loading diagnostic action', async () => {
     await import('../src/bookmarklet');
     const host = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!;
-    expect(host.shadowRoot!.querySelector('[data-action="copy-load-diagnostic"]')).toBeTruthy();
+    expect(host.shadowRoot!.querySelectorAll('[data-action="copy-load-diagnostic"]')).toHaveLength(2);
   });
 });

@@ -73,6 +73,6 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
     expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.2.1');
+    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.2.2');
   });
 });

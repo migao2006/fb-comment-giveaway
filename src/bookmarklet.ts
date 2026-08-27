@@ -4,7 +4,7 @@ import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from 
 import type { FacebookComment, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.2.1';
+const TOOL_VERSION = '0.2.2';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {

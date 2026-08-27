@@ -75,6 +75,24 @@ describe('loadMoreComments', () => {
     expect(clicked).not.toHaveBeenCalled();
   });
 
+  it('safely expands an explicit visible reply control', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const replyButton = document.createElement('div');
+    replyButton.setAttribute('role', 'button');
+    replyButton.textContent = '查看 9 則回覆';
+    replyButton.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    const clicked = vi.fn();
+    replyButton.addEventListener('click', clicked);
+    root.append(replyButton);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
   it('does not stop merely because the parsed count stays unchanged for three rounds', async () => {
     vi.useFakeTimers();
     let y = 0;

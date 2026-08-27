@@ -65,7 +65,7 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
   return url ? { name: clean(link.textContent), url } : { name: clean(link.textContent) };
 }
 
-const semanticCommentSelector = '[data-comment-id], [aria-label*="的留言"], [aria-label*="的回覆"], [aria-label^="Comment by"], [aria-label^="Reply by"]';
+const semanticCommentSelector = '[data-comment-id], [aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]';
 
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
@@ -86,11 +86,34 @@ function findBody(node: Element, authorName: string): string {
 function commentNodes(root: ParentNode): Element[] {
   const marked = [...root.querySelectorAll('[data-comment-id]')];
   if (marked.length) return marked;
-  return [...root.querySelectorAll(semanticCommentSelector)].filter((node) => {
+  const signals = [...root.querySelectorAll(semanticCommentSelector)];
+  const direct = signals.filter((node) => {
     const label = clean(node.getAttribute('aria-label'));
-    const isCommentLabel = /的(?:留言|回覆)(?:$|\s*[，。·]|\s+\d)/.test(label) || /^(?:Comment|Reply) by\s+.+$/i.test(label);
-    return isCommentLabel && Boolean(node.querySelector('a[href]')) && Boolean(node.querySelector('[dir="auto"], [lang], span'));
+    return !/^(?:留言|回覆|Comments?|Replies?)$/i.test(label) && isPlausibleCommentContainer(node);
   });
+  if (direct.length) return direct;
+
+  const derived = new Set<Element>();
+  signals.forEach((signal) => {
+    let candidate = signal.parentElement;
+    for (let depth = 0; candidate && depth < 7; depth += 1, candidate = candidate.parentElement) {
+      if (candidate.matches('html, body, [role="feed"]')) break;
+      if (isPlausibleCommentContainer(candidate)) { derived.add(candidate); break; }
+    }
+  });
+  return [...derived];
+}
+
+function isPlausibleCommentContainer(node: Element): boolean {
+  const author = [...node.querySelectorAll<HTMLAnchorElement>('a[href]')]
+    .find((link) => Boolean(clean(link.textContent)) && Boolean(canonicalProfileUrl(link.getAttribute('href'))));
+  if (!author) return false;
+  const authorName = clean(author.textContent);
+  return [...node.querySelectorAll<HTMLElement>('[dir="auto"], [lang], span')]
+    .some((textNode) => {
+      const text = clean(textNode.textContent);
+      return text.length > 0 && text !== authorName && !/^(?:讚|回覆|留言|分享|Like|Reply|Comment|Share)$/i.test(text);
+    });
 }
 
 function postIdentity(value: string): string {

@@ -77,4 +77,9 @@ describe('parseFacebookPost', () => {
     expect(result.comments).toMatchObject([{ authorName: '手機使用者', body: 'iPhone 參加' }]);
     expect(result.comments).toHaveLength(1);
   });
+  it('derives an anonymous div comment container from its labeled controls', () => {
+    const html = `<div><a href="/control-host">作者</a><section><div class="comment"><a href="/control-user">參加者</a><span dir="auto">控制項參加</span><button aria-label="回覆這則留言"><span>回覆</span></button></div></section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/control' }).window.document;
+    expect(parseFacebookPost(document, 'https://facebook.com/posts/control').comments).toMatchObject([{ authorName: '參加者', body: '控制項參加' }]);
+  });
 });

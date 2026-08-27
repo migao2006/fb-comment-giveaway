@@ -220,7 +220,9 @@ function mount(): void {
   }
 
   async function copyDiagnostic(): Promise<void> {
-    const details = { code: 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '', articles: document.querySelectorAll('article').length, roleArticles: document.querySelectorAll('[role="article"]').length, labeledComments: document.querySelectorAll('[aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]').length, mainElements: document.querySelectorAll('main, [role="main"]').length, language: document.documentElement.lang || 'unknown', browser: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}` };
+    const labelNodes = [...document.querySelectorAll<HTMLElement>('[aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]')];
+    const labelPatterns = [...new Set(labelNodes.map((node) => `${node.tagName.toLowerCase()}[role=${node.getAttribute('role') ?? '-'}] ${safeLabelPattern(node.getAttribute('aria-label') ?? '')}`))].slice(0, 12);
+    const details = { code: 'POST_NOT_FOUND', message: parsed.diagnostics[0] ?? '', articles: document.querySelectorAll('article').length, roleArticles: document.querySelectorAll('[role="article"]').length, labeledComments: labelNodes.length, labelPatterns, mainElements: document.querySelectorAll('main, [role="main"]').length, language: document.documentElement.lang || 'unknown', browser: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}` };
     const state = query<HTMLElement>('[data-copy-state]');
     try { await navigator.clipboard.writeText(JSON.stringify(details, null, 2)); state.textContent = '已複製'; }
     catch { state.textContent = '複製失敗，請截圖錯誤代碼'; }
@@ -278,6 +280,10 @@ function snapshotEntries(comments: FacebookComment[]): Array<[string, FacebookCo
 
 function storeFingerprint(store: Map<string, FacebookComment>): string {
   return [...store].map(([key, comment]) => `${key}\n${comment.authorUrl ?? comment.authorName}\n${comment.body}\n${comment.createdAt ?? ''}`).join('\n---\n');
+}
+
+function safeLabelPattern(value: string): string {
+  return value.replace(/[^\s留言回覆按讚的這則查看更多，。:：()（）[\]\-]/gu, '•').replace(/•+/g, '•').slice(0, 120);
 }
 
 function clampNumber(value: string, minimum: number, maximum: number): number {

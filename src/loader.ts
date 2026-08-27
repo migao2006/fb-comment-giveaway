@@ -51,9 +51,10 @@ export async function loadMoreComments(
   onProgress: (progress: LoadingProgress) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const maxRounds = 40;
-  let stagnantRounds = 0;
+  const maxRounds = 60;
+  let settledBottomRounds = 0;
   let previousCount = getCommentCount();
+  let previousDocumentHeight = document.documentElement.scrollHeight;
   const clickedAtCount = new WeakMap<HTMLElement, number>();
 
   for (let round = 1; round <= maxRounds && !signal.aborted; round += 1) {
@@ -69,9 +70,14 @@ export async function loadMoreComments(
     });
     await pause(buttons.length ? 1100 : 750, signal);
     const currentCount = getCommentCount();
-    stagnantRounds = currentCount > previousCount ? 0 : stagnantRounds + 1;
+    const currentDocumentHeight = document.documentElement.scrollHeight;
+    const reachedBottom = window.scrollY + window.innerHeight >= currentDocumentHeight - 96;
+    const pageGrew = currentDocumentHeight > previousDocumentHeight + 8;
+    const commentsGrew = currentCount > previousCount;
+    settledBottomRounds = reachedBottom && !pageGrew && !commentsGrew ? settledBottomRounds + 1 : 0;
     previousCount = currentCount;
+    previousDocumentHeight = currentDocumentHeight;
     onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則主留言` });
-    if (stagnantRounds >= 3) return;
+    if (settledBottomRounds >= 3) return;
   }
 }

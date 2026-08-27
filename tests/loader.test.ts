@@ -74,4 +74,22 @@ describe('loadMoreComments', () => {
     await operation;
     expect(clicked).not.toHaveBeenCalled();
   });
+
+  it('does not stop merely because the parsed count stays unchanged for three rounds', async () => {
+    vi.useFakeTimers();
+    let y = 0;
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y);
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => { y += 500; });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 10_000 });
+    const progress: number[] = [];
+    const operation = loadMoreComments(
+      document,
+      () => 7,
+      ({ round }) => { progress.push(round); },
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(Math.max(...progress)).toBeGreaterThan(3);
+  });
 });

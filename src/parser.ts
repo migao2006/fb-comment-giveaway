@@ -60,10 +60,13 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
     const href = item.getAttribute('href') ?? '';
     return Boolean(name) && !/comment|reply|reaction|hashtag/i.test(href) && !/更多|回覆|讚|留言/.test(name);
   });
-  if (!link) return undefined;
-  const url = canonicalProfileUrl(link.getAttribute('href'));
-  const name = profileElementName(link);
-  return url ? { name, url } : { name };
+  if (link) {
+    const url = canonicalProfileUrl(link.getAttribute('href'));
+    const name = profileElementName(link);
+    return url ? { name, url } : { name };
+  }
+  const name = commentTextParts(node)[0];
+  return name ? { name } : undefined;
 }
 
 function profileElements(node: ParentNode): HTMLElement[] {
@@ -78,6 +81,40 @@ function profileElementName(node: HTMLElement): string {
 
 const semanticCommentSelector = '[data-comment-id], [aria-label*="留言"], [aria-label*="回覆"], [aria-label*="Comment"], [aria-label*="Reply"]';
 
+const commentActionText = /^(?:讚|回覆|留言|分享|更多|查看.*|已編輯|作者|最相關|所有留言|\d+\s*(?:分鐘|小時|天|週|個月|年)(?:前)?|\d+\s*(?:個?讚|則?回覆)|Like|Reply|Comment|Share)$/i;
+
+function commentTextParts(node: Element): string[] {
+  const candidates = [...node.querySelectorAll<HTMLElement>('[dir="auto"]')]
+    .filter((item) => !item.querySelector('[dir="auto"]'))
+    .map((item) => clean(item.textContent))
+    .filter((text) => text.length > 0 && !commentActionText.test(text));
+  return [...new Set(candidates)];
+}
+
+function isMobileCommentAction(node: Element): boolean {
+  const label = clean(node.getAttribute('aria-label'));
+  return node.matches('button, [role="button"]')
+    && /^留言.+按.+按/u.test(label)
+    && !/(?:查看|更多|顯示).{0,8}留言|(?:反應|心情|按讚人數)/u.test(label);
+}
+
+function mobileCommentRows(root: ParentNode): Element[] {
+  const rows = new Set<Element>();
+  root.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]').forEach((signal) => {
+    if (!isMobileCommentAction(signal)) return;
+    let candidate = signal.parentElement;
+    for (let depth = 0; candidate && depth < 3; depth += 1, candidate = candidate.parentElement) {
+      const parts = commentTextParts(candidate);
+      const buttons = candidate.querySelectorAll('button, [role="button"]').length;
+      if (parts.length >= 2 && buttons <= 12) {
+        rows.add(candidate);
+        break;
+      }
+    }
+  });
+  return [...rows].filter((row) => ![...rows].some((nested) => nested !== row && row.contains(nested)));
+}
+
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
   clone.querySelectorAll(semanticCommentSelector).forEach((nested) => nested.remove());
@@ -88,7 +125,9 @@ function findBody(node: Element, authorName: string): string {
   const scope = withoutNestedComments(node);
   const marked = scope.querySelector<HTMLElement>('[data-comment-body]');
   if (marked) return clean(marked.textContent);
-  const candidates = [...scope.querySelectorAll<HTMLElement>('[dir="auto"], [lang], span')]
+  const mobileParts = commentTextParts(scope).filter((text) => text !== authorName);
+  if (mobileParts.length) return mobileParts[0] ?? '';
+  const candidates = [...scope.querySelectorAll<HTMLElement>('[lang], span')]
     .map((item) => clean(item.textContent))
     .filter((text) => text && text !== authorName && !/^(讚|回覆|更多|查看.*回覆)$/.test(text));
   return candidates.sort((a, b) => b.length - a.length)[0] ?? '';
@@ -102,7 +141,9 @@ function commentNodes(root: ParentNode): Element[] {
     const label = clean(node.getAttribute('aria-label'));
     return !/^(?:留言|回覆|Comments?|Replies?)$/i.test(label) && isPlausibleCommentContainer(node);
   });
-  if (direct.length) return direct;
+  const mobileRows = mobileCommentRows(root)
+    .filter((row) => !direct.some((node) => node === row || node.contains(row) || row.contains(node)));
+  if (direct.length || mobileRows.length) return [...direct, ...mobileRows];
 
   const derived = new Set<Element>();
   signals.forEach((signal) => {

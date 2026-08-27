@@ -89,4 +89,38 @@ describe('parseFacebookPost', () => {
     expect(result.postAuthor?.name).toBe('貼文作者');
     expect(result.comments).toMatchObject([{ authorName: '無網址參加者', body: 'role link 參加' }]);
   });
+
+  it('parses repeated iPhone comment rows whose authors are plain text', () => {
+    const rows = Array.from({ length: 20 }, (_, index) => `<div class="row">
+      <span dir="auto">參加者 ${index + 1}</span><span dir="auto">第 ${index + 1} 則參加留言</span>
+      <div role="button" aria-label="留言操作，按兩下即可按讚"><span dir="auto">讚</span></div>
+      <div role="button" aria-label="回覆這則留言"><span dir="auto">回覆</span></div>
+    </div>`).join('');
+    const html = `<div><header><a href="/host">主辦人</a></header><section>${rows}</section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/plain-authors' }).window.document;
+    const result = parseFacebookPost(document, 'https://facebook.com/posts/plain-authors');
+    expect(result.comments).toHaveLength(20);
+    expect(result.comments[0]).toMatchObject({ authorName: '參加者 1', body: '第 1 則參加留言' });
+    expect(result.comments[19]).toMatchObject({ authorName: '參加者 20', body: '第 20 則參加留言' });
+    expect(result.comments.every((comment) => comment.authorUrl === undefined)).toBe(true);
+  });
+
+  it('does not treat reaction-list or more-comments controls as comments', () => {
+    const html = `<div><a href="/host">作者</a><span dir="auto">59 人</span><span dir="auto">查看名單</span>
+      <div role="button" aria-label="59 人，按兩下即可查看留言"></div>
+      <div role="button" aria-label="查看更多留言"><span>查看更多留言</span></div>
+    </div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/safe' }).window.document;
+    expect(parseFacebookPost(document, 'https://facebook.com/posts/safe').comments).toHaveLength(0);
+  });
+
+  it('keeps a short comment body ahead of time and interaction metadata', () => {
+    const html = `<div><a href="/host">作者</a><div class="row">
+      <span dir="auto">小明</span><span dir="auto">+1</span><span dir="auto">2 小時</span><span dir="auto">12 個讚</span>
+      <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+    </div></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/short' }).window.document;
+    expect(parseFacebookPost(document, 'https://facebook.com/posts/short').comments)
+      .toMatchObject([{ authorName: '小明', body: '+1' }]);
+  });
 });

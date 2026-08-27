@@ -65,7 +65,7 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
   return url ? { name: clean(link.textContent), url } : { name: clean(link.textContent) };
 }
 
-const semanticCommentSelector = '[data-comment-id], article[aria-label*="留言"], [role="article"][aria-label*="留言"], article[aria-label*="回覆"], [role="article"][aria-label*="回覆"], article[aria-label*="Comment by"], [role="article"][aria-label*="Comment by"], article[aria-label*="Reply by"], [role="article"][aria-label*="Reply by"]';
+const semanticCommentSelector = '[data-comment-id], [aria-label*="的留言"], [aria-label*="的回覆"], [aria-label^="Comment by"], [aria-label^="Reply by"]';
 
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
@@ -86,7 +86,11 @@ function findBody(node: Element, authorName: string): string {
 function commentNodes(root: ParentNode): Element[] {
   const marked = [...root.querySelectorAll('[data-comment-id]')];
   if (marked.length) return marked;
-  return [...root.querySelectorAll(semanticCommentSelector)];
+  return [...root.querySelectorAll(semanticCommentSelector)].filter((node) => {
+    const label = clean(node.getAttribute('aria-label'));
+    const isCommentLabel = /的(?:留言|回覆)(?:$|\s*[，。·]|\s+\d)/.test(label) || /^(?:Comment|Reply) by\s+.+$/i.test(label);
+    return isCommentLabel && Boolean(node.querySelector('a[href]')) && Boolean(node.querySelector('[dir="auto"], [lang], span'));
+  });
 }
 
 function postIdentity(value: string): string {

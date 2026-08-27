@@ -65,4 +65,16 @@ describe('parseFacebookPost', () => {
     expect(result.postAuthor?.name).toBe('手機版作者');
     expect(result.comments).toMatchObject([{ authorName: '行動使用者', body: '手機參加' }]);
   });
+  it('parses iPhone Facebook div comments without article, role or main elements', () => {
+    const html = `<div id="mobile-shell"><header><a href="/iphone-host">iPhone 作者</a></header><section>
+      <div aria-label="手機使用者的留言"><a href="/iphone-user">手機使用者</a><span dir="auto">iPhone 參加</span>
+        <button aria-label="對手機使用者的留言按讚"><span>讚</span></button>
+      </div>
+    </section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/iphone' }).window.document;
+    const result = parseFacebookPost(document, 'https://facebook.com/posts/iphone');
+    expect(result.postAuthor?.name).toBe('iPhone 作者');
+    expect(result.comments).toMatchObject([{ authorName: '手機使用者', body: 'iPhone 參加' }]);
+    expect(result.comments).toHaveLength(1);
+  });
 });

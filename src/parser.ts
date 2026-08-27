@@ -65,7 +65,7 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
   return url ? { name: clean(link.textContent), url } : { name: clean(link.textContent) };
 }
 
-const semanticCommentSelector = '[data-comment-id], article[aria-label*="留言"], [role="article"][aria-label*="留言"], article[aria-label*="回覆"], [role="article"][aria-label*="回覆"]';
+const semanticCommentSelector = '[data-comment-id], article[aria-label*="留言"], [role="article"][aria-label*="留言"], article[aria-label*="回覆"], [role="article"][aria-label*="回覆"], article[aria-label*="Comment by"], [role="article"][aria-label*="Comment by"], article[aria-label*="Reply by"], [role="article"][aria-label*="Reply by"]';
 
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
@@ -100,6 +100,35 @@ function postIdentity(value: string): string {
   } catch { return ''; }
 }
 
+function fallbackCommentThreadRoot(root: ParentNode): ParentNode | undefined {
+  const comments = commentNodes(root);
+  if (!comments.length) return undefined;
+  let common = comments[0]?.parentElement;
+  while (common && !comments.every((comment) => common!.contains(comment))) common = common.parentElement;
+  if (!common || common.matches('html, body, [role="feed"]')) return undefined;
+
+  let candidate: Element | null = common;
+  for (let depth = 0; candidate && depth < 8; depth += 1, candidate = candidate.parentElement) {
+    if (candidate.matches('html, body, [role="feed"]')) break;
+    const hasPostAuthor = [...candidate.querySelectorAll<HTMLAnchorElement>('a[href]')]
+      .some((link) => !comments.some((comment) => comment.contains(link)) && Boolean(clean(link.textContent)) && Boolean(canonicalProfileUrl(link.getAttribute('href'))));
+    if (hasPostAuthor) return candidate;
+  }
+  return common;
+}
+
+function independentPostMain(root: ParentNode, sourceUrl: string): ParentNode | undefined {
+  let url: URL;
+  try { url = new URL(sourceUrl); } catch { return undefined; }
+  if (!url.pathname || url.pathname === '/') return undefined;
+  const mains = [...root.querySelectorAll<HTMLElement>('main, [role="main"]')]
+    .filter((main, index, all) => !all.some((parent, parentIndex) => parentIndex !== index && parent.contains(main)));
+  if (mains.length !== 1) return undefined;
+  const hasCommentControl = [...mains[0]!.querySelectorAll<HTMLElement>('button, [role="button"]')]
+    .some((button) => /留言|comment/i.test(clean(button.textContent) || button.getAttribute('aria-label') || ''));
+  return hasCommentControl ? mains[0] : undefined;
+}
+
 /** Selects one post instead of accidentally combining every post in a feed. */
 export function findFacebookPostRoot(
   root: ParentNode = document,
@@ -117,10 +146,11 @@ export function findFacebookPostRoot(
     .filter((article) => commentNodes(article).some((comment) => comment !== article))
     .filter((article, _index, all) => !all.some((parent) => parent !== article && parent.contains(article)));
   if (candidates.length === 1) return candidates[0];
-  if (!candidates.length) return undefined;
   const permalinkMatches = candidates.filter((article) => currentIdentity && [...article.querySelectorAll<HTMLAnchorElement>('a[href]')]
     .some((link) => postIdentity(link.href) === currentIdentity));
-  return permalinkMatches.length === 1 ? permalinkMatches[0] : undefined;
+  if (permalinkMatches.length === 1) return permalinkMatches[0];
+  if (candidates.length > 1) return undefined;
+  return fallbackCommentThreadRoot(root) ?? independentPostMain(root, sourceUrl);
 }
 
 /**

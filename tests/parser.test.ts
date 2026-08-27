@@ -56,4 +56,13 @@ describe('parseFacebookPost', () => {
     expect(findFacebookPostRoot(document, 'https://facebook.com/story.php?story_fbid=target&id=8')?.querySelector('a')?.textContent).toBe('目標貼文');
     expect(findFacebookPostRoot(document, 'https://facebook.com/story.php?story_fbid=missing&id=8')).toBeUndefined();
   });
+  it('finds a mobile comment thread whose post wrapper has no article role', () => {
+    const html = `<main role="main"><div class="mobile-post"><header><a href="/mobile-host">手機版作者</a></header>
+      <section><div role="article" aria-label="行動使用者的留言"><a href="/mobile-user">行動使用者</a><span dir="auto">手機參加</span></div></section>
+    </div></main>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/mobile' }).window.document;
+    const result = parseFacebookPost(document, 'https://facebook.com/posts/mobile');
+    expect(result.postAuthor?.name).toBe('手機版作者');
+    expect(result.comments).toMatchObject([{ authorName: '行動使用者', body: '手機參加' }]);
+  });
 });

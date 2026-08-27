@@ -5,7 +5,7 @@ export interface LoadingProgress {
   message: string;
 }
 
-export type LoadingEndReason = 'complete' | 'limit-reached' | 'root-lost' | 'aborted';
+export type LoadingEndReason = 'complete' | 'controls-remain' | 'limit-reached' | 'root-lost' | 'aborted';
 
 const MORE_COMMENT_PATTERNS = [
   /^查看更多留言(?:（\d+）)?$/,
@@ -41,10 +41,18 @@ function findExpansionButtons(root: ParentNode, visibleOnly = true): HTMLElement
   const candidates = root.querySelectorAll<HTMLElement>('button, [role="button"]');
   return [...candidates].filter((element) => {
     const text = textOf(element);
+    const unavailable = element.hasAttribute('disabled')
+      || element.getAttribute('aria-disabled') === 'true'
+      || element.getAttribute('aria-expanded') === 'true';
     return (visibleOnly ? isVisible(element) : isRendered(element))
+      && !unavailable
       && ([...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
       && !/(?:按讚|心情|反應)/.test(text);
   });
+}
+
+export function hasPendingExpansionControls(root: ParentNode): boolean {
+  return findExpansionButtons(root, false).length > 0;
 }
 
 function isTruncatedCommentButton(element: HTMLElement, text: string): boolean {
@@ -109,11 +117,14 @@ export async function loadMoreComments(
     previousDocumentHeight = currentDocumentHeight;
     onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則留言（含回覆）` });
     if (settledBottomRounds >= 3) {
-      const pending = findExpansionButtons(root, false).filter((button) => clickedAtCount.get(button) !== currentCount);
-      if (pending.length) {
-        pending[0]!.scrollIntoView?.({ block: 'center' });
+      const pending = findExpansionButtons(root, false);
+      const untried = pending.find((button) => clickedAtCount.get(button) !== currentCount);
+      if (untried) {
+        untried.scrollIntoView?.({ block: 'center' });
         settledBottomRounds = 0;
         await pause(350, signal);
+      } else if (pending.length) {
+        return 'controls-remain';
       } else {
         return 'complete';
       }

@@ -3,6 +3,8 @@ import type { FacebookComment, ParsedFacebookPost } from './types';
 export interface FullCommentExport {
   toolVersion: string;
   exportedAt: string;
+  snapshotId: string;
+  snapshotCapturedAt: string;
   sourcePage: string;
   postAuthor?: ParsedFacebookPost['postAuthor'];
   load: {
@@ -11,6 +13,7 @@ export interface FullCommentExport {
     mainComments: number;
     replies: number;
     total: number;
+    pendingExpansionControls: boolean;
     complete: boolean;
   };
   comments: FacebookComment[];

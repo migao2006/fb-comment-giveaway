@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadMoreComments } from '../src/loader';
+import { hasPendingExpansionControls, loadMoreComments } from '../src/loader';
 
 describe('loadMoreComments', () => {
   afterEach(() => {
@@ -91,6 +91,43 @@ describe('loadMoreComments', () => {
     await vi.runAllTimersAsync();
     await operation;
     expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report complete while a tried expansion control remains rendered', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const replyButton = document.createElement('button');
+    replyButton.textContent = '查看1則回覆';
+    replyButton.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    root.append(replyButton);
+    document.body.append(root);
+
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+
+    await expect(operation).resolves.toBe('controls-remain');
+    expect(hasPendingExpansionControls(root)).toBe(true);
+  });
+
+  it('ignores disabled and already-expanded controls when verifying pending work', () => {
+    const root = document.createElement('div');
+    const disabled = document.createElement('button');
+    disabled.textContent = '查看更多留言';
+    disabled.disabled = true;
+    const ariaDisabled = document.createElement('div');
+    ariaDisabled.setAttribute('role', 'button');
+    ariaDisabled.setAttribute('aria-disabled', 'true');
+    ariaDisabled.textContent = '查看2則回覆';
+    const expanded = document.createElement('button');
+    expanded.setAttribute('aria-expanded', 'true');
+    expanded.textContent = '查看1則回覆';
+    for (const control of [disabled, ariaDisabled, expanded]) {
+      control.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
+      root.append(control);
+    }
+    document.body.append(root);
+    expect(hasPendingExpansionControls(root)).toBe(false);
   });
 
   it('expands exact 查看更多 only inside a comment row', async () => {

@@ -1,11 +1,11 @@
-import { loadMoreComments } from './loader';
+import { hasPendingExpansionControls, loadMoreComments } from './loader';
 import { commentsToCsv, commentsToText, formatLocalDate, mediaLabel, orderedComments, type FullCommentExport } from './comment-export';
 import { findFacebookPostRoot, parseFacebookPost } from './parser';
 import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from './raffle';
 import type { FacebookComment, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.3.0';
+const TOOL_VERSION = '0.3.1';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -99,6 +99,15 @@ function mount(): void {
   let hasLoadingAttempt = false;
   let loadOutcome = '尚未執行';
   let reportedCommentTotal: number | undefined;
+  let snapshotRevision = 0;
+  let dataSnapshot = {
+    id: '0',
+    capturedAt: new Date().toISOString(),
+    parsed: cloneParsedPost(parsed),
+    reportedCommentTotal: undefined as number | undefined,
+    loadOutcome,
+    pendingExpansionControls: false,
+  };
   const loadHistory: Array<{ round: number; clicked: number; commentCount: number; message: string }> = [];
 
   const query = <T extends Element>(selector: string) => shadow.querySelector<T>(selector)!;
@@ -107,6 +116,41 @@ function mount(): void {
   const loadButton = query<HTMLButtonElement>('[data-action="load"]');
   const stopButton = query<HTMLButtonElement>('[data-action="stop"]');
   const errorCard = query<HTMLElement>('[data-error]');
+
+  function resetLoadingVerification(): void {
+    hasLoadingAttempt = false;
+    loadOutcome = '尚未執行';
+    loadHistory.length = 0;
+  }
+
+  function commitDataSnapshot(postRoot?: ParentNode): void {
+    snapshotRevision += 1;
+    dataSnapshot = {
+      id: String(snapshotRevision),
+      capturedAt: new Date().toISOString(),
+      parsed: cloneParsedPost(parsed),
+      reportedCommentTotal,
+      loadOutcome,
+      pendingExpansionControls: postRoot ? hasPendingExpansionControls(postRoot) : false,
+    };
+  }
+
+  function revalidateCompletedSnapshot(): boolean {
+    if (dataSnapshot.loadOutcome !== '載入完成') return false;
+    const postRoot = findFacebookPostRoot(document, activePage);
+    const liveReportedTotal = postRoot ? findReportedCommentTotal(postRoot) : undefined;
+    const pendingControls = postRoot ? hasPendingExpansionControls(postRoot) : false;
+    const snapshotTotal = dataSnapshot.parsed.comments.length + dataSnapshot.parsed.replies.length;
+    const stillComplete = liveReportedTotal !== undefined && liveReportedTotal === snapshotTotal && !pendingControls;
+    if (stillComplete) return true;
+    reportedCommentTotal = liveReportedTotal;
+    loadOutcome = pendingControls ? '尚有留言未展開'
+      : liveReportedTotal === undefined ? '無法驗證完整' : '載入未完整';
+    invalidateResult();
+    commitDataSnapshot(postRoot);
+    refreshSummary('⚠️ Facebook 留言已更新，請再次執行「載入全部留言」。');
+    return false;
+  }
 
   function currentFilters(): RaffleFilters {
     const keyword = query<HTMLInputElement>('[name="keyword"]').value.trim();
@@ -122,40 +166,42 @@ function mount(): void {
   }
 
   function refreshSummary(message?: string, refreshComments = true): void {
+    const snapshotParsed = dataSnapshot.parsed;
     const filters = currentFilters();
-    const filtered = filterComments(parsed.comments, parsed.postAuthor, filters);
+    const filtered = filterComments(snapshotParsed.comments, snapshotParsed.postAuthor, filters);
     const eligible = participantsFrom(filtered, filters.oneEntryPerPerson !== false);
-    const allAuthors = participantsFrom(parsed.comments, true);
+    const allAuthors = participantsFrom(snapshotParsed.comments, true);
     const duplicatePeople = allAuthors.filter((person) => person.comments.length > 1).length;
-    const missingProfiles = parsed.comments.filter((comment) => !comment.authorUrl).length;
-    query<HTMLElement>('[data-stat="comments"]').textContent = String(parsed.comments.length);
-    query<HTMLElement>('[data-stat="replies"]').textContent = String(parsed.replies.length);
-    const parsedTotal = parsed.comments.length + parsed.replies.length;
+    const missingProfiles = snapshotParsed.comments.filter((comment) => !comment.authorUrl).length;
+    query<HTMLElement>('[data-stat="comments"]').textContent = String(snapshotParsed.comments.length);
+    query<HTMLElement>('[data-stat="replies"]').textContent = String(snapshotParsed.replies.length);
+    const parsedTotal = snapshotParsed.comments.length + snapshotParsed.replies.length;
     query<HTMLElement>('[data-stat="total"]').textContent = String(parsedTotal);
     query<HTMLElement>('[data-stat="loaded"]').textContent = String(parsedTotal);
     const coverage = query<HTMLElement>('[data-coverage]');
-    coverage.classList.toggle('hidden', reportedCommentTotal === undefined && !hasLoadingAttempt);
-    if (reportedCommentTotal === undefined) {
+    const snapshotReportedTotal = dataSnapshot.reportedCommentTotal;
+    coverage.classList.toggle('hidden', snapshotReportedTotal === undefined && !hasLoadingAttempt);
+    if (snapshotReportedTotal === undefined) {
       coverage.classList.add('partial');
       coverage.textContent = hasLoadingAttempt ? `已讀取 ${parsedTotal} 則 · Facebook 未提供可核對的總數` : '';
     } else {
-      const countDifference = parsedTotal - reportedCommentTotal;
+      const countDifference = parsedTotal - snapshotReportedTotal;
       coverage.classList.toggle('partial', countDifference !== 0);
       coverage.textContent = countDifference === 0
-        ? `Facebook 顯示 ${reportedCommentTotal} 則 · 已讀取 ${parsedTotal} 則 · 數量一致`
+        ? `Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 數量一致`
         : countDifference < 0
-          ? `Facebook 顯示 ${reportedCommentTotal} 則 · 已讀取 ${parsedTotal} 則 · 尚差 ${Math.abs(countDifference)} 則`
-          : `Facebook 顯示 ${reportedCommentTotal} 則 · 已讀取 ${parsedTotal} 則 · 多出 ${countDifference} 則，請檢查重複或回覆分類`;
+          ? `Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 尚差 ${Math.abs(countDifference)} 則`
+          : `Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 多出 ${countDifference} 則，請檢查重複或回覆分類`;
     }
-    const missingDates = (filters.startDate || filters.endDate) ? parsed.comments.filter((comment) => !comment.createdAt).length : 0;
-    query<HTMLElement>('[data-candidates]').textContent = `符合條件：${eligible.length} 個抽獎資格 · ${allAuthors.length} 位主留言者${duplicatePeople ? ` · ${duplicatePeople} 位重複留言` : ''}${parsed.postAuthor ? ` · 貼文作者：${parsed.postAuthor.name}` : ''}${missingDates ? ` · ${missingDates} 則無時間已排除` : ''}${missingProfiles ? ` · ${missingProfiles} 則缺個人頁連結，無法帳號去重` : ''}`;
+    const missingDates = (filters.startDate || filters.endDate) ? snapshotParsed.comments.filter((comment) => !comment.createdAt).length : 0;
+    query<HTMLElement>('[data-candidates]').textContent = `符合條件：${eligible.length} 個抽獎資格 · ${allAuthors.length} 位主留言者${duplicatePeople ? ` · ${duplicatePeople} 位重複留言` : ''}${snapshotParsed.postAuthor ? ` · 貼文作者：${snapshotParsed.postAuthor.name}` : ''}${missingDates ? ` · ${missingDates} 則無時間已排除` : ''}${missingProfiles ? ` · ${missingProfiles} 則缺個人頁連結，無法帳號去重` : ''}`;
     drawButton.disabled = eligible.length === 0;
     if (refreshComments) renderFullComments();
     if (message) status.textContent = message;
   }
 
   function renderFullComments(): void {
-    const all = orderedComments(parsed);
+    const all = orderedComments(dataSnapshot.parsed);
     const term = query<HTMLInputElement>('[name="commentSearch"]').value.trim().toLocaleLowerCase();
     const visible = term ? all.filter((comment) => [comment.authorName, comment.body, comment.replyToAuthorName ?? '']
       .some((value) => value.toLocaleLowerCase().includes(term))) : all;
@@ -198,15 +244,24 @@ function mount(): void {
 
   function scan(message = '掃描完成', mode: 'replace' | 'accumulate' = 'accumulate', root: ParentNode = document): number {
     const currentPage = pageKey();
-    if (currentPage !== activePage) {
+    const pageChanged = currentPage !== activePage;
+    if (pageChanged) {
       loadController?.abort();
       rawCommentStore.clear();
       activePage = currentPage;
+      resetLoadingVerification();
       invalidateResult();
       mode = 'replace';
     }
-    reportedCommentTotal = findReportedCommentTotal(document) ?? reportedCommentTotal;
-    const current = parseFacebookPost(root, activePage);
+    const locatedPostRoot = findFacebookPostRoot(document, activePage);
+    const suppliedRootConnected = !(root instanceof Element) || root.isConnected;
+    if (!suppliedRootConnected) mode = 'replace';
+    const parseRoot = pageChanged || !suppliedRootConnected ? locatedPostRoot : root;
+    const currentPostRoot = locatedPostRoot ?? parseRoot;
+    reportedCommentTotal = currentPostRoot ? findReportedCommentTotal(currentPostRoot) : undefined;
+    const current = parseRoot
+      ? parseFacebookPost(parseRoot, activePage)
+      : { comments: [], replies: [], diagnostics: ['目前找不到可辨識的貼文留言區。'] };
     const beforeDataset = storeFingerprint(rawCommentStore);
     const beforeAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
     if (mode === 'replace') rawCommentStore.clear();
@@ -244,6 +299,7 @@ function mount(): void {
     const afterDataset = storeFingerprint(rawCommentStore);
     const afterAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
     if (lastSnapshot && (beforeDataset !== afterDataset || beforeAuthor !== afterAuthor)) invalidateResult();
+    commitDataSnapshot(currentPostRoot);
     const diagnostic = current.diagnostics[0];
     refreshSummary(parsed.comments.length ? message : diagnostic ?? '目前找不到可辨識的留言。');
     errorCard.classList.toggle('hidden', parsed.comments.length > 0);
@@ -254,6 +310,7 @@ function mount(): void {
   async function startLoading(): Promise<void> {
     if (loadController) return;
     if (!ensureCurrentPage()) return;
+    const loadingPage = activePage;
     const postRoot = findFacebookPostRoot(document, activePage);
     if (!postRoot) {
       status.textContent = '無法唯一定位目前貼文，請開啟貼文的獨立頁面後重試。';
@@ -276,17 +333,49 @@ function mount(): void {
         },
         loadController.signal,
       );
-      loadOutcome = endReason === 'complete' ? '載入完成'
+      if (pageKey() !== loadingPage || activePage !== loadingPage) {
+        loadOutcome = '留言區已更新';
+        const latestPageRoot = findFacebookPostRoot(document, pageKey());
+        scan(loadOutcome, 'replace', latestPageRoot ?? document);
+        loadOutcome = '留言區已更新';
+        const committedRoot = findFacebookPostRoot(document, activePage);
+        commitDataSnapshot(committedRoot);
+        refreshSummary();
+        status.textContent = '⚠️ 已切換到其他貼文，舊貼文載入已停止；請重新載入目前貼文';
+        return;
+      }
+      const terminalOutcome = endReason === 'controls-remain' ? '尚有留言未展開'
         : endReason === 'limit-reached' ? '達到輪數上限'
-          : endReason === 'root-lost' ? '留言區已更新' : '使用者停止';
-      scan(loadOutcome);
+          : endReason === 'root-lost' ? '留言區已更新'
+            : endReason === 'aborted' ? '使用者停止' : '驗證載入結果中';
+      loadOutcome = terminalOutcome;
+      scan(loadOutcome, 'accumulate', postRoot);
+      loadOutcome = terminalOutcome;
       const parsedTotal = parsed.comments.length + parsed.replies.length;
       const difference = reportedCommentTotal === undefined ? undefined : parsedTotal - reportedCommentTotal;
-      status.textContent = difference === undefined
-        ? '⚠️ 已載入頁面可展開內容，但 Facebook 未提供總數，無法確認是否完整'
-        : difference < 0 ? `⚠️ 尚有 ${Math.abs(difference)} 則留言未載入或未展開`
-          : difference > 0 ? `⚠️ 已讀取數量比 Facebook 顯示多 ${difference} 則，請檢查資料`
-            : endReason === 'complete' ? '✅ 已完成載入' : loadOutcome;
+      const latestPostRoot = findFacebookPostRoot(document, activePage) ?? postRoot;
+      const pendingControls = hasPendingExpansionControls(latestPostRoot);
+      const verifiedComplete = endReason === 'complete' && difference === 0 && !pendingControls;
+      loadOutcome = verifiedComplete ? '載入完成'
+        : endReason === 'root-lost' ? '留言區已更新'
+          : endReason === 'aborted' ? '使用者停止'
+            : endReason === 'limit-reached' ? '達到輪數上限'
+              : endReason === 'controls-remain' || pendingControls ? '尚有留言未展開'
+                : difference === undefined ? '無法驗證完整'
+                  : difference !== 0 ? '載入未完整'
+                    : loadOutcome;
+      commitDataSnapshot(latestPostRoot);
+      refreshSummary();
+      status.textContent = verifiedComplete
+        ? `✅ 已完成載入，共取得 ${parsed.comments.length} 則主留言、${parsed.replies.length} 則回覆，總計 ${parsedTotal} 則留言`
+        : endReason === 'root-lost' ? '⚠️ 留言區已更新，已改讀目前貼文，請再次載入全部留言'
+          : endReason === 'aborted' ? '已停止載入'
+            : endReason === 'limit-reached' ? '⚠️ 已達載入輪數上限，請再次載入'
+              : pendingControls ? '⚠️ 頁面仍有留言或回覆尚未展開，請再次載入'
+                : difference === undefined ? '⚠️ 已載入頁面可展開內容，但 Facebook 未提供總數，無法確認是否完整'
+                  : difference < 0 ? `⚠️ 尚有 ${Math.abs(difference)} 則留言未載入或未展開`
+                    : difference > 0 ? `⚠️ 已讀取數量比 Facebook 顯示多 ${difference} 則，請檢查資料`
+                      : loadOutcome;
     } finally {
       loadController = undefined;
       loadButton.classList.remove('hidden');
@@ -320,14 +409,16 @@ function mount(): void {
 
   async function draw(): Promise<void> {
     if (!ensureCurrentPage()) return;
-    if (!hasLoadingAttempt && !confirm(`目前只包含頁面已載入的 ${parsed.comments.length} 則主留言，尚未執行「載入全部留言」。仍要直接抽獎嗎？`)) return;
+    const snapshotParsed = dataSnapshot.parsed;
+    const verifiedComplete = revalidateCompletedSnapshot();
+    if (!verifiedComplete && !confirm(`目前資料尚未驗證完整，只包含快照中的 ${snapshotParsed.comments.length} 則主留言。仍要直接抽獎嗎？`)) return;
     const winnerCount = clampNumber(query<HTMLInputElement>('[name="winnerCount"]').value, 1, 100);
     const alternateCount = clampNumber(query<HTMLInputElement>('[name="alternateCount"]').value, 0, 100);
     const filters = currentFilters();
     try {
-      const result = drawRaffle(parsed.comments, parsed.postAuthor, filters, winnerCount, alternateCount);
+      const result = drawRaffle(snapshotParsed.comments, snapshotParsed.postAuthor, filters, winnerCount, alternateCount);
       const proof = await createRaffleProof(result, filters, activePage);
-      lastSnapshot = { result, proof, filters: { ...filters }, sourcePage: activePage, postAuthor: parsed.postAuthor };
+      lastSnapshot = { result, proof, filters: { ...filters }, sourcePage: activePage, postAuthor: snapshotParsed.postAuthor };
       renderPeople(query('[data-winners]'), '正取', result.winners);
       renderPeople(query('[data-alternates]'), '備取', result.alternates);
       query<HTMLElement>('[data-results]').classList.remove('hidden');
@@ -372,31 +463,36 @@ function mount(): void {
         const rect = node.getBoundingClientRect();
         return { actionLeft: Math.round(rect.left), actionWidth: Math.round(rect.width), textRects };
       });
-    const detectedTotal = findReportedCommentTotal(document) ?? reportedCommentTotal;
-    const parsedTotal = parsed.comments.length + parsed.replies.length;
+    const snapshotParsed = dataSnapshot.parsed;
+    const detectedTotal = dataSnapshot.reportedCommentTotal;
+    const parsedTotal = snapshotParsed.comments.length + snapshotParsed.replies.length;
     const reportedGap = detectedTotal ? Math.max(0, detectedTotal - parsedTotal) : 0;
     const reportedDifference = detectedTotal === undefined ? null : parsedTotal - detectedTotal;
     const details = {
       diagnosticVersion: 5,
       toolVersion: TOOL_VERSION,
-      code: !parsed.comments.length
+      code: !snapshotParsed.comments.length
         ? 'POST_NOT_FOUND'
-        : loadOutcome === '載入完成' && reportedDifference === null ? 'LOAD_UNVERIFIED'
-          : loadOutcome === '載入完成' && reportedDifference !== 0 ? 'LOAD_PARTIAL'
-          : loadOutcome === '載入完成' ? 'LOAD_COMPLETE'
-          : loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
-            : loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
-              : loadOutcome === '留言區已更新' ? 'LOAD_ROOT_LOST'
-                : loadOutcome === '執行中' ? 'LOAD_RUNNING' : 'LOAD_NOT_ATTEMPTED',
-      message: parsed.diagnostics[0] ?? '',
-      parsedComments: parsed.comments.length,
-      parsedReplies: parsed.replies.length,
+        : dataSnapshot.loadOutcome === '載入完成' && !dataSnapshot.pendingExpansionControls && reportedDifference === 0 ? 'LOAD_COMPLETE'
+          : dataSnapshot.loadOutcome === '無法驗證完整' ? 'LOAD_UNVERIFIED'
+            : dataSnapshot.loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
+              : dataSnapshot.loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
+                : dataSnapshot.loadOutcome === '留言區已更新' ? 'LOAD_ROOT_LOST'
+                  : dataSnapshot.loadOutcome === '執行中' ? 'LOAD_RUNNING'
+                    : hasLoadingAttempt ? 'LOAD_PARTIAL'
+                      : 'LOAD_NOT_ATTEMPTED',
+      message: snapshotParsed.diagnostics[0] ?? '',
+      snapshotId: dataSnapshot.id,
+      snapshotCapturedAt: dataSnapshot.capturedAt,
+      parsedComments: snapshotParsed.comments.length,
+      parsedReplies: snapshotParsed.replies.length,
       parsedTotal,
       reportedCommentTotal: detectedTotal ?? null,
       reportedGap,
       reportedDifference,
       loadingAttempted: hasLoadingAttempt,
-      loadOutcome,
+      pendingExpansionControls: dataSnapshot.pendingExpansionControls,
+      loadOutcome: dataSnapshot.loadOutcome,
       loadHistory,
       windowScroll: { x: Math.round(scrollX), y: Math.round(scrollY), innerHeight, documentHeight: document.documentElement.scrollHeight, bodyHeight: document.body?.scrollHeight ?? 0 },
       scrollContainers,
@@ -421,20 +517,24 @@ function mount(): void {
   }
 
   function fullCommentDataset(): FullCommentExport {
-    const comments = orderedComments(parsed);
-    const countsMatch = reportedCommentTotal !== undefined && reportedCommentTotal === comments.length;
+    const snapshotParsed = dataSnapshot.parsed;
+    const comments = orderedComments(snapshotParsed);
+    const countsMatch = dataSnapshot.reportedCommentTotal !== undefined && dataSnapshot.reportedCommentTotal === comments.length;
     return {
       toolVersion: TOOL_VERSION,
       exportedAt: new Date().toISOString(),
+      snapshotId: dataSnapshot.id,
+      snapshotCapturedAt: dataSnapshot.capturedAt,
       sourcePage: activePage,
-      ...(parsed.postAuthor ? { postAuthor: parsed.postAuthor } : {}),
+      ...(snapshotParsed.postAuthor ? { postAuthor: snapshotParsed.postAuthor } : {}),
       load: {
-        outcome: loadOutcome,
-        ...(reportedCommentTotal !== undefined ? { reportedCommentTotal } : {}),
-        mainComments: parsed.comments.length,
-        replies: parsed.replies.length,
+        outcome: dataSnapshot.loadOutcome,
+        ...(dataSnapshot.reportedCommentTotal !== undefined ? { reportedCommentTotal: dataSnapshot.reportedCommentTotal } : {}),
+        mainComments: snapshotParsed.comments.length,
+        replies: snapshotParsed.replies.length,
         total: comments.length,
-        complete: loadOutcome === '載入完成' && countsMatch,
+        pendingExpansionControls: dataSnapshot.pendingExpansionControls,
+        complete: dataSnapshot.loadOutcome === '載入完成' && countsMatch && !dataSnapshot.pendingExpansionControls,
       },
       comments,
     };
@@ -442,7 +542,8 @@ function mount(): void {
 
   function ensureCommentData(): FacebookComment[] | undefined {
     if (!ensureCurrentPage()) return undefined;
-    const comments = orderedComments(parsed);
+    revalidateCompletedSnapshot();
+    const comments = orderedComments(dataSnapshot.parsed);
     if (!comments.length) status.textContent = '目前沒有可查看或匯出的留言資料。';
     return comments.length ? comments : undefined;
   }
@@ -459,6 +560,19 @@ function mount(): void {
     }
   }
 
+  const handlePageNavigation = (): void => {
+    if (typeof location === 'undefined' || !host.isConnected) {
+      pageObserver.disconnect();
+      if (typeof window !== 'undefined') window.removeEventListener('popstate', handlePageNavigation);
+      return;
+    }
+    if (loadController || pageKey() === activePage) return;
+    scan('偵測到已切換貼文，留言資料已更新', 'replace');
+  };
+  const pageObserver = new MutationObserver(handlePageNavigation);
+  pageObserver.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('popstate', handlePageNavigation);
+
   const rulesChanged = (event: Event) => {
     if ((event.target as HTMLInputElement).name === 'commentSearch') { renderFullComments(); return; }
     invalidateResult();
@@ -470,9 +584,14 @@ function mount(): void {
     const button = (event.target as Element).closest<HTMLButtonElement>('button[data-action]');
     if (!button) return;
     const action = button.dataset.action;
-    if (action === 'close') { loadController?.abort(); host.remove(); }
+    if (action === 'close') {
+      loadController?.abort();
+      pageObserver.disconnect();
+      window.removeEventListener('popstate', handlePageNavigation);
+      host.remove();
+    }
     if (action === 'collapse') host.toggleAttribute('data-collapsed');
-    if (action === 'scan') scan('掃描完成', 'replace');
+    if (action === 'scan') { resetLoadingVerification(); scan('掃描完成', 'replace'); }
     if (action === 'load') void startLoading();
     if (action === 'stop') loadController?.abort();
     if (action === 'draw') void draw();
@@ -481,13 +600,25 @@ function mount(): void {
     if (action === 'copy-comments') void copyAllComments();
     if (action === 'export-csv') {
       const comments = ensureCommentData();
-      if (comments) downloadText('facebook-comments.csv', commentsToCsv(comments), 'text/csv;charset=utf-8');
+      if (comments) {
+        downloadText('facebook-comments.csv', commentsToCsv(comments), 'text/csv;charset=utf-8');
+        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 CSV（資料快照 #${dataSnapshot.id}）。`;
+      }
     }
     if (action === 'export-txt') {
       const comments = ensureCommentData();
-      if (comments) downloadText('facebook-comments.txt', commentsToText(comments), 'text/plain;charset=utf-8');
+      if (comments) {
+        downloadText('facebook-comments.txt', commentsToText(comments), 'text/plain;charset=utf-8');
+        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 TXT（資料快照 #${dataSnapshot.id}）。`;
+      }
     }
-    if (action === 'export-json' && ensureCommentData()) downloadJson('facebook-comments.json', fullCommentDataset());
+    if (action === 'export-json') {
+      const comments = ensureCommentData();
+      if (comments) {
+        downloadJson('facebook-comments.json', fullCommentDataset());
+        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 JSON（資料快照 #${dataSnapshot.id}）。`;
+      }
+    }
     if (action === 'proof' && lastSnapshot && ensureCurrentPage()) downloadJson('fb-giveaway-record.json', lastSnapshot.proof);
     if (action === 'full-export' && lastSnapshot && ensureCurrentPage() && confirm('完整名單包含姓名、留言與個人頁連結。確定要下載到這台裝置嗎？')) {
       downloadJson('fb-giveaway-full-list.json', {
@@ -502,7 +633,7 @@ function mount(): void {
     }
   });
 
-  host.addEventListener('fb-giveaway:activate', () => scan('已重新檢查目前貼文', 'replace'));
+  host.addEventListener('fb-giveaway:activate', () => { resetLoadingVerification(); scan('已重新檢查目前貼文', 'replace'); });
 
   scan('掃描完成', 'replace');
 }
@@ -545,6 +676,19 @@ function normalizedBodyPrefix(value: string): string {
 
 function storeFingerprint(store: Map<string, FacebookComment>): string {
   return [...store].map(([key, comment]) => `${key}\n${comment.kind}\n${comment.authorUrl ?? comment.authorName}\n${comment.body}\n${comment.createdAt ?? ''}\n${comment.replyToAuthorName ?? ''}`).join('\n---\n');
+}
+
+function cloneParsedPost(value: ParsedFacebookPost): ParsedFacebookPost {
+  const cloneComment = (comment: FacebookComment): FacebookComment => ({
+    ...comment,
+    ...(comment.media ? { media: comment.media.map((media) => ({ ...media })) } : {}),
+  });
+  return {
+    ...(value.postAuthor ? { postAuthor: { ...value.postAuthor } } : {}),
+    comments: value.comments.map(cloneComment),
+    replies: value.replies.map(cloneComment),
+    diagnostics: [...value.diagnostics],
+  };
 }
 
 function safeLabelPattern(value: string): string {

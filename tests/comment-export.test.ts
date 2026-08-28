@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commentsToCsv, commentsToText, orderedComments } from '../src/comment-export';
+import { commentsToCsv, orderedComments } from '../src/comment-export';
 import type { FacebookComment } from '../src/types';
 
 const main: FacebookComment = { id: 'main', sequence: 1, kind: 'comment', authorName: '=危險名稱', body: '第一行,\n第二行' };
@@ -19,11 +19,6 @@ describe('full comment export', () => {
     expect(commentsToCsv([{ ...main, authorName: '\t=仍是公式' }])).toContain('"\'\t=仍是公式"');
   });
 
-  it('writes a readable complete TXT representation', () => {
-    expect(commentsToText([main, reply])).toContain('1. 主留言');
-    expect(commentsToText([main, reply])).toContain('回覆對象：=危險名稱');
-  });
-
   it('persists snapshot verification metadata in partial exports', () => {
     const metadata = {
       snapshotId: '12', verificationStatus: 'visible-complete' as const, reportedCommentTotal: 179, parsedTotal: 171,
@@ -31,6 +26,5 @@ describe('full comment export', () => {
     const csv = commentsToCsv([main], metadata);
     expect(csv).toContain('"資料快照","驗證狀態","Facebook顯示總數","實際讀取總數"');
     expect(csv).toContain('"12","visible-complete","179","171"');
-    expect(commentsToText([main], metadata)).toContain('驗證狀態：visible-complete');
   });
 });

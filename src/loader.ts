@@ -10,6 +10,7 @@ export type LoadingEndReason = 'complete' | 'controls-remain' | 'limit-reached' 
 /** A caller may provide stable boundary/signature values in addition to the count. */
 export interface LoadingSnapshot {
   commentCount: number;
+  expectedCount?: number;
   boundary?: string;
   signature?: string;
 }
@@ -26,23 +27,31 @@ export interface LoadingResult {
 }
 
 const MORE_COMMENT_PATTERNS = [
-  /^查看更多留言(?:（\d+）)?$/,
+  /^查看更多\s*(?:[（(]?\s*\d+\s*[）)]?\s*)?則?留言$/,
   /^顯示更多留言$/,
+  /^展開更多留言$/,
   /^更多留言$/,
-  /^查看更多留言$/,
   /^查看先前的留言$/,
-  /^查看另?\s*\d+\s*則留言$/,
+  /^查看(?:另|另外)?\s*\d+\s*則留言$/,
 ];
 
 const MORE_REPLY_PATTERNS = [
-  /^查看更多回覆$/,
+  /^查看更多\s*(?:[（(]?\s*\d+\s*[）)]?\s*)?則?回覆$/,
   /^顯示更多回覆$/,
+  /^展開更多回覆$/,
   /^查看先前的回覆$/,
-  /^查看另?\s*\d+\s*則回覆$/,
-  /^查看\s*\d+\s*則回覆$/,
+  /^查看(?:另|另外)?\s*\d+\s*則回覆$/,
 ];
 
 const textOf = (element: Element) => (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+function controlTexts(element: Element): string[] {
+  const visibleText = textOf(element);
+  const accessibleText = ((element.getAttribute('aria-label') ?? '').split(/[，。]/u, 1)[0] ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return [...new Set([visibleText, accessibleText].filter(Boolean))];
+}
 
 function isVisible(element: HTMLElement): boolean {
   const style = getComputedStyle(element);
@@ -58,14 +67,14 @@ function isRendered(element: HTMLElement, style = getComputedStyle(element), rec
 function findExpansionButtons(root: ParentNode, visibleOnly = true): HTMLElement[] {
   const candidates = root.querySelectorAll<HTMLElement>('button, [role="button"]');
   return [...candidates].filter((element) => {
-    const text = textOf(element);
+    const texts = controlTexts(element);
     const unavailable = element.hasAttribute('disabled')
       || element.getAttribute('aria-disabled') === 'true'
       || element.getAttribute('aria-expanded') === 'true';
     return (visibleOnly ? isVisible(element) : isRendered(element))
       && !unavailable
-      && ([...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
-      && !/(?:按讚|心情|反應)/.test(text);
+      && texts.some((text) => [...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
+      && texts.every((text) => !/(?:按讚|心情|反應)/.test(text));
   });
 }
 
@@ -119,6 +128,15 @@ function scrollStep(target: ScrollTarget): number {
     : Math.max(window.innerHeight * 0.72, 460);
 }
 
+function scrollExtent(target: ScrollTarget): number {
+  return target instanceof HTMLElement ? target.scrollHeight : document.documentElement.scrollHeight;
+}
+
+function estimatedRoundLimit(target: ScrollTarget, requiredPasses: number): number {
+  const roundsPerPass = Math.max(1, Math.ceil(scrollExtent(target) / scrollStep(target)));
+  return Math.min(720, Math.max(180, roundsPerPass * (requiredPasses + 1) + 24));
+}
+
 function positionAtStart(root: ParentNode, target: ScrollTarget): void {
   if (target instanceof HTMLElement) {
     target.scrollTo?.({ top: 0, behavior: 'auto' });
@@ -140,12 +158,13 @@ function normalizeSnapshot(value: number | LoadingSnapshot): LoadingSnapshot {
 
 function sameSnapshot(left: LoadingSnapshot, right: LoadingSnapshot): boolean {
   return left.commentCount === right.commentCount
+    && (left.expectedCount === undefined || right.expectedCount === undefined || left.expectedCount === right.expectedCount)
     && (left.boundary === undefined || right.boundary === undefined || left.boundary === right.boundary)
     && (left.signature === undefined || right.signature === undefined || left.signature === right.signature);
 }
 
 function snapshotKey(snapshot: LoadingSnapshot): string {
-  return `${snapshot.commentCount}\u0000${snapshot.boundary ?? ''}\u0000${snapshot.signature ?? ''}`;
+  return `${snapshot.commentCount}\u0000${snapshot.expectedCount ?? ''}\u0000${snapshot.boundary ?? ''}\u0000${snapshot.signature ?? ''}`;
 }
 
 /**
@@ -158,9 +177,9 @@ export async function loadMoreComments(
   onProgress: (progress: LoadingProgress) => void,
   signal: AbortSignal,
 ): Promise<LoadingResult> {
-  const maxRounds = 120;
   const clickedAtSnapshot = new WeakMap<HTMLElement, string>();
   const scrollTarget = findScrollTarget(root);
+  let maxRounds = estimatedRoundLimit(scrollTarget, 3);
   let rounds = 0;
   let stablePasses = 0;
   let previous: LoadingSnapshot;
@@ -182,6 +201,7 @@ export async function loadMoreComments(
   previous = normalizeSnapshot(getSnapshot());
 
   for (rounds = 1; rounds <= maxRounds && !signal.aborted; rounds += 1) {
+    maxRounds = Math.max(maxRounds, estimatedRoundLimit(scrollTarget, 3));
     if (root instanceof Element && !root.isConnected) return result('root-lost', false);
     const key = snapshotKey(previous);
     const buttons = findExpansionButtons(root)
@@ -217,9 +237,17 @@ export async function loadMoreComments(
       else {
         stablePasses = completedPassSnapshot && sameSnapshot(completedPassSnapshot, current) ? stablePasses + 1 : 1;
         completedPassSnapshot = current;
-        if (stablePasses >= 2) return result('complete', false);
+        const requiredPasses = current.expectedCount !== undefined && current.commentCount < current.expectedCount ? 3 : 2;
+        if (stablePasses >= requiredPasses) return result('complete', false);
         positionAtStart(root, scrollTarget);
-        onProgress({ round: rounds, clicked: 0, commentCount: current.commentCount, message: '第一輪已到底，正在從留言起點進行完整核對…' });
+        onProgress({
+          round: rounds,
+          clicked: 0,
+          commentCount: current.commentCount,
+          message: stablePasses === 1
+            ? '第一輪已到底，正在從留言起點進行完整核對…'
+            : 'Facebook 顯示仍有差額，正在進行額外完整核對…',
+        });
         await pause(350, signal);
         previous = normalizeSnapshot(getSnapshot());
       }

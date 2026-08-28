@@ -93,6 +93,25 @@ describe('loadMoreComments', () => {
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
+  it('expands iPhone aria-only numbered reply controls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const replyButton = document.createElement('div');
+    replyButton.setAttribute('role', 'button');
+    replyButton.setAttribute('aria-label', '查看更多 8 則回覆，按兩下即可展開');
+    replyButton.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    const clicked = vi.fn(() => replyButton.remove());
+    replyButton.addEventListener('click', clicked);
+    root.append(replyButton);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await operation;
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
   it('does not report complete while a tried expansion control remains rendered', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
@@ -214,6 +233,44 @@ describe('loadMoreComments', () => {
       signature: 'set-2',
       stablePasses: 2,
     });
+  });
+
+  it('runs an extra full verification pass while Facebook reports a count gap', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 0 });
+    const operation = loadMoreComments(
+      document,
+      () => ({ commentCount: 7, expectedCount: 10, boundary: 'last', signature: 'set' }),
+      () => undefined,
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', stablePasses: 3, finalCount: 7 });
+  });
+
+  it('finishes three verification passes on a tall mobile comment page', async () => {
+    vi.useFakeTimers();
+    let y = 0;
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y);
+    vi.spyOn(window, 'scrollBy').mockImplementation((optionsOrX?: ScrollToOptions | number) => {
+      y += typeof optionsOrX === 'object' ? Number(optionsOrX.top ?? 0) : Number(optionsOrX ?? 0);
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 742 });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 45_256 });
+    const root = document.createElement('section');
+    root.scrollIntoView = vi.fn(() => { y = 0; });
+    document.body.append(root);
+    const progress: number[] = [];
+    const operation = loadMoreComments(
+      root,
+      () => ({ commentCount: 151, expectedCount: 167, boundary: 'last', signature: 'set' }),
+      ({ round }) => { progress.push(round); },
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', stablePasses: 3, finalCount: 151 });
+    expect(Math.max(...progress)).toBeGreaterThan(180);
   });
 
   it('uses the nearest scrollable ancestor after positioning the comment root', async () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const post = (id: string, participant: string) => `
   <article data-post-id="${id}">
@@ -11,6 +11,13 @@ const post = (id: string, participant: string) => `
   </article>`;
 
 describe('bookmarklet UI', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete (navigator as unknown as Record<string, unknown>).share;
+    delete (navigator as unknown as Record<string, unknown>).canShare;
+  });
+
   beforeEach(() => {
     document.querySelector('#fb-comment-giveaway-bookmarklet')?.remove();
     document.body.innerHTML = post('one', '甲');
@@ -105,7 +112,7 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
     expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.2');
+    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.3');
   });
 
   it('shows and searches the raw comment list independently of raffle filters', async () => {
@@ -118,7 +125,10 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('2');
     expect(shadow.querySelectorAll('.comment-card')).toHaveLength(2);
-    expect(shadow.querySelectorAll('[data-action^="export-"]')).toHaveLength(3);
+    expect(shadow.querySelectorAll('[data-action^="export-"]')).toHaveLength(1);
+    expect(shadow.querySelector('[data-action="copy-comments"]')).toBeNull();
+    expect(shadow.querySelector('[data-action="export-txt"]')).toBeNull();
+    expect(shadow.querySelector('[data-action="export-json"]')).toBeNull();
     const search = shadow.querySelector<HTMLInputElement>('[name="commentSearch"]')!;
     search.value = '只是回覆';
     search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -134,6 +144,8 @@ describe('bookmarklet UI', () => {
     const coverage = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-coverage]')!;
     expect(coverage.textContent).toContain('Facebook 顯示 167 則');
     expect(coverage.textContent).toContain('尚差 166 則');
+    const summary = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-comment-list-summary]')!;
+    expect(summary.textContent).toContain('Facebook 顯示 167 則，目前取得 1 則，尚差 166 則');
   });
 
   it('reads the reported total only from the selected post root', async () => {
@@ -216,9 +228,56 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('2');
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(downloadedFilename).toBe('facebook-comments-partial.csv');
-    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toMatch(/^已下載 2 則 CSV（資料快照 #\d+）。$/);
+    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toMatch(/^已送出 CSV 下載（2 則，資料快照 #\d+）。$/);
+  });
+
+  it('uses the iPhone share sheet so CSV can be saved to Files', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)');
+    const share = vi.fn().mockResolvedValue(undefined);
+    const canShare = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, 'share', { configurable: true, value: share });
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: canShare });
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(canShare).toHaveBeenCalled();
+    expect(share).toHaveBeenCalledTimes(1);
+    const file = share.mock.calls[0]?.[0]?.files?.[0] as File;
+    expect(file.name).toBe('facebook-comments-partial.csv');
+    expect(file.type).toBe('text/csv;charset=utf-8');
+    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toContain('已完成 CSV 儲存／分享');
+    delete (navigator as unknown as Record<string, unknown>).share;
+    delete (navigator as unknown as Record<string, unknown>).canShare;
+    userAgent.mockRestore();
+  });
+
+  it('opens a persistent CSV link on iPhone when file sharing is unavailable', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)');
+    const canShare = vi.fn().mockReturnValue(false);
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: canShare });
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:iphone-csv');
+    const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('blob:iphone-csv', '_blank');
+    expect(revokeObjectUrl).not.toHaveBeenCalled();
+    const fallback = shadow.querySelector<HTMLAnchorElement>('[data-comment-copy-state] a')!;
+    expect(fallback.href).toBe('blob:iphone-csv');
+    expect(fallback.download).toBe('facebook-comments-partial.csv');
+    expect(fallback.textContent).toContain('儲存到檔案');
+    delete (navigator as unknown as Record<string, unknown>).canShare;
+    userAgent.mockRestore();
+    open.mockRestore();
   });
 
   it('does not export partial data when the user cancels the confirmation', async () => {
@@ -249,6 +308,7 @@ describe('bookmarklet UI', () => {
     await vi.runAllTimersAsync();
     await Promise.resolve();
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
     expect(downloadedFilename).toBe('facebook-comments.csv');
     vi.useRealTimers();
   });
@@ -272,9 +332,10 @@ describe('bookmarklet UI', () => {
 
     document.querySelector('#reported')!.setAttribute('aria-label', '2 則留言，按兩下即可查看留言');
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
     expect(shadow.querySelector('[data-status]')!.textContent).toContain('Facebook 留言已更新');
     expect(shadow.querySelector('[data-coverage]')!.textContent).toContain('尚差 1 則');
-    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toContain('已下載 1 則 CSV');
+    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toContain('已送出 CSV 下載（1 則');
     vi.useRealTimers();
   });
 

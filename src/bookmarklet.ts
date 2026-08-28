@@ -1,11 +1,11 @@
 import { hasPendingExpansionControls, loadMoreComments } from './loader';
-import { commentsToCsv, commentsToText, formatLocalDate, mediaLabel, orderedComments, type FullCommentExport } from './comment-export';
+import { commentsToCsv, formatLocalDate, mediaLabel, orderedComments } from './comment-export';
 import { findFacebookPostRoot, parseFacebookPost } from './parser';
 import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from './raffle';
 import type { FacebookComment, LoadVerificationStatus, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.3.2';
+const TOOL_VERSION = '0.3.3';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -56,9 +56,6 @@ function mount(): void {
         <div class="comment-list" data-comment-list></div>
         <div class="raw-export-row">
           <button class="button primary" data-action="export-csv">下載 CSV</button>
-          <button class="button secondary" data-action="copy-comments">複製全部留言</button>
-          <button class="button secondary" data-action="export-txt">下載 TXT</button>
-          <button class="button secondary" data-action="export-json">下載 JSON</button>
         </div>
         <p class="copy-state" data-comment-copy-state></p>
       </details>
@@ -223,8 +220,16 @@ function mount(): void {
     const visible = term ? all.filter((comment) => [comment.authorName, comment.body, comment.replyToAuthorName ?? '']
       .some((value) => value.toLocaleLowerCase().includes(term))) : all;
     query<HTMLElement>('[data-comment-count]').textContent = `${all.length} 則`;
+    const reported = dataSnapshot.reportedCommentTotal;
+    const reportedSummary = reported === undefined
+      ? 'Facebook 未提供可核對總數'
+      : all.length < reported
+        ? `Facebook 顯示 ${reported} 則，目前取得 ${all.length} 則，尚差 ${reported - all.length} 則`
+        : all.length > reported
+          ? `Facebook 顯示 ${reported} 則，目前取得 ${all.length} 則，讀取數多 ${all.length - reported} 則`
+          : `Facebook 顯示 ${reported} 則，數量一致`;
     query<HTMLElement>('[data-comment-list-summary]').textContent = all.length
-      ? `顯示 ${visible.length}／${all.length} 則；搜尋只影響畫面，不影響匯出或抽獎。`
+      ? `顯示 ${visible.length}／${all.length} 則；${reportedSummary}。搜尋只影響畫面，不影響 CSV 或抽獎。`
       : '尚無留言資料';
     const list = query<HTMLElement>('[data-comment-list]');
     list.replaceChildren();
@@ -349,6 +354,7 @@ function mount(): void {
           const records = orderedComments(parsed);
           return {
             commentCount,
+            ...(reportedCommentTotal === undefined ? {} : { expectedCount: reportedCommentTotal }),
             boundary: `${records[0]?.id ?? ''}\n${records.at(-1)?.id ?? ''}`,
             signature: storeFingerprint(rawCommentStore),
           };
@@ -557,33 +563,6 @@ function mount(): void {
     catch { states.forEach((state) => { state.textContent = '複製失敗，請截圖錯誤代碼'; }); }
   }
 
-  function fullCommentDataset(): FullCommentExport {
-    const snapshotParsed = dataSnapshot.parsed;
-    const comments = orderedComments(snapshotParsed);
-    const countsMatch = dataSnapshot.reportedCommentTotal !== undefined && dataSnapshot.reportedCommentTotal === comments.length;
-    return {
-      toolVersion: TOOL_VERSION,
-      exportedAt: new Date().toISOString(),
-      snapshotId: dataSnapshot.id,
-      snapshotCapturedAt: dataSnapshot.capturedAt,
-      sourcePage: activePage,
-      ...(snapshotParsed.postAuthor ? { postAuthor: snapshotParsed.postAuthor } : {}),
-      load: {
-        outcome: dataSnapshot.loadOutcome,
-        ...(dataSnapshot.reportedCommentTotal !== undefined ? { reportedCommentTotal: dataSnapshot.reportedCommentTotal } : {}),
-        mainComments: snapshotParsed.comments.length,
-        replies: snapshotParsed.replies.length,
-        total: comments.length,
-        pendingExpansionControls: dataSnapshot.pendingExpansionControls,
-        complete: dataSnapshot.verificationStatus === 'verified-complete' && countsMatch && !dataSnapshot.pendingExpansionControls,
-        verificationStatus: dataSnapshot.verificationStatus,
-        reportedGap: Math.max(0, (dataSnapshot.reportedCommentTotal ?? comments.length) - comments.length),
-        stablePasses: dataSnapshot.stablePasses,
-      },
-      comments,
-    };
-  }
-
   function ensureCommentData(): FacebookComment[] | undefined {
     if (!ensureCurrentPage()) return undefined;
     revalidateCompletedSnapshot();
@@ -602,22 +581,39 @@ function mount(): void {
     };
   }
 
-  function confirmPartialUse(action: '複製' | '下載' | '抽獎'): boolean {
+  function confirmPartialUse(action: '下載' | '抽獎'): boolean {
     if (dataSnapshot.verificationStatus === 'verified-complete') return true;
     const total = dataSnapshot.parsed.comments.length + dataSnapshot.parsed.replies.length;
     const gap = dataSnapshot.reportedCommentTotal === undefined ? undefined : Math.max(0, dataSnapshot.reportedCommentTotal - total);
     return confirm(`目前是部分資料：已讀取 ${total} 則${gap ? `，Facebook 顯示仍多 ${gap} 則可能無法存取` : ''}。檔案會標記為 partial，仍要${action}嗎？`);
   }
 
-  async function copyAllComments(): Promise<void> {
+  async function exportCommentsCsv(): Promise<void> {
     const comments = ensureCommentData();
-    if (!comments || !confirmPartialUse('複製')) return;
+    if (!comments || !confirmPartialUse('下載')) return;
+    const partial = dataSnapshot.verificationStatus !== 'verified-complete';
+    const filename = partial ? 'facebook-comments-partial.csv' : 'facebook-comments.csv';
     const state = query<HTMLElement>('[data-comment-copy-state]');
     try {
-      await copyText(commentsToText(comments, exportMetadata()));
-      state.textContent = `已複製 ${comments.length} 則完整留言。`;
-    } catch {
-      state.textContent = '複製失敗，請改用下載 CSV、TXT 或 JSON。';
+      const saved = await saveCsv(filename, commentsToCsv(comments, exportMetadata()));
+      if (saved.method === 'share') {
+        state.textContent = `已完成 CSV 儲存／分享（${comments.length} 則，資料快照 #${dataSnapshot.id}）。`;
+      } else if (saved.method === 'download') {
+        state.textContent = `已送出 CSV 下載（${comments.length} 則，資料快照 #${dataSnapshot.id}）。`;
+      } else {
+        state.replaceChildren(document.createTextNode(`CSV 已準備完成（${comments.length} 則）。`));
+        const link = document.createElement('a');
+        link.href = saved.url;
+        link.download = filename;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = '點此開啟 CSV，再按分享並選「儲存到檔案」';
+        state.append(document.createElement('br'), link);
+      }
+    } catch (error) {
+      state.textContent = error instanceof DOMException && error.name === 'AbortError'
+        ? '已取消 CSV 儲存。'
+        : 'CSV 儲存失敗，請再試一次或確認 Safari 允許開啟分享面板。';
     }
   }
 
@@ -658,31 +654,7 @@ function mount(): void {
     if (action === 'draw') void draw();
     if (action === 'copy-diagnostic') void copyDiagnostic();
     if (action === 'copy-load-diagnostic') void copyDiagnostic();
-    if (action === 'copy-comments') void copyAllComments();
-    if (action === 'export-csv') {
-      const comments = ensureCommentData();
-      if (comments && confirmPartialUse('下載')) {
-        const partial = dataSnapshot.verificationStatus !== 'verified-complete';
-        downloadText(partial ? 'facebook-comments-partial.csv' : 'facebook-comments.csv', commentsToCsv(comments, exportMetadata()), 'text/csv;charset=utf-8');
-        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 CSV（資料快照 #${dataSnapshot.id}）。`;
-      }
-    }
-    if (action === 'export-txt') {
-      const comments = ensureCommentData();
-      if (comments && confirmPartialUse('下載')) {
-        const partial = dataSnapshot.verificationStatus !== 'verified-complete';
-        downloadText(partial ? 'facebook-comments-partial.txt' : 'facebook-comments.txt', commentsToText(comments, exportMetadata()), 'text/plain;charset=utf-8');
-        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 TXT（資料快照 #${dataSnapshot.id}）。`;
-      }
-    }
-    if (action === 'export-json') {
-      const comments = ensureCommentData();
-      if (comments && confirmPartialUse('下載')) {
-        const partial = dataSnapshot.verificationStatus !== 'verified-complete';
-        downloadJson(partial ? 'facebook-comments-partial.json' : 'facebook-comments.json', fullCommentDataset());
-        query<HTMLElement>('[data-comment-copy-state]').textContent = `已下載 ${comments.length} 則 JSON（資料快照 #${dataSnapshot.id}）。`;
-      }
-    }
+    if (action === 'export-csv') void exportCommentsCsv();
     if (action === 'proof' && lastSnapshot && ensureCurrentPage()) downloadJson('fb-giveaway-record.json', lastSnapshot.proof);
     if (action === 'full-export' && lastSnapshot && ensureCurrentPage() && confirm('完整名單包含姓名、留言與個人頁連結。確定要下載到這台裝置嗎？')) {
       downloadJson('fb-giveaway-full-list.json', {
@@ -803,18 +775,53 @@ function downloadJson(filename: string, value: unknown): void {
   downloadText(filename, JSON.stringify(value, null, 2), 'application/json;charset=utf-8');
 }
 
+type CsvSaveResult = { method: 'share' } | { method: 'download' } | { method: 'open'; url: string };
+
+async function saveCsv(filename: string, value: string): Promise<CsvSaveResult> {
+  const file = new File([value], filename, { type: 'text/csv;charset=utf-8' });
+  const shareData: ShareData = { files: [file], title: filename };
+  const appleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (appleMobile) {
+    let canShareFile = Boolean(navigator.share);
+    try {
+      if (navigator.canShare) canShareFile = navigator.canShare(shareData);
+    } catch {
+      canShareFile = false;
+    }
+    if (canShareFile && navigator.share) {
+      try {
+        await navigator.share(shareData);
+        return { method: 'share' };
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      }
+    }
+    const url = URL.createObjectURL(file);
+    window.open(url, '_blank');
+    window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60_000);
+    return { method: 'open', url };
+  }
+  downloadBlob(filename, file);
+  return { method: 'download' };
+}
+
 function downloadText(filename: string, value: string, mimeType: string): void {
-  const blob = new Blob([value], { type: mimeType });
+  downloadBlob(filename, new Blob([value], { type: mimeType }));
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
   document.body.append(anchor);
   anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
 }
 
 async function copyText(value: string): Promise<void> {

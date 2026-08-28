@@ -182,4 +182,106 @@ describe('parseFacebookPost', () => {
     expect(result.comments.every((comment) => comment.id.startsWith('rendered-node-'))).toBe(true);
   });
 
+  it('keeps iPhone nested reply rows separate and trusts reply aria labels over inherited text', () => {
+    const html = `<div><header><a href="/host">主辦人</a></header><section>
+      <div class="row" aria-label="葉白的留言">
+        <a href="/ye">葉白</a><span dir="auto">我要參加抽獎</span>
+        <div class="reply-row" aria-label="白序言回覆葉白的留言">
+          <a href="/bai">白序言</a><span dir="auto">葉白 必須</span>
+          <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+        </div>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+      <div class="row" aria-label="陳小美回覆白序言的回覆">
+        <a href="/chen">陳小美</a><span dir="auto">我也來參加</span>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const result = parseFacebookPost(new JSDOM(html, { url: 'https://facebook.com/posts/iphone-replies' }).window.document);
+    expect(result.comments).toMatchObject([{ authorName: '葉白', body: '我要參加抽獎', kind: 'comment' }]);
+    expect(result.replies).toMatchObject([
+      { authorName: '白序言', replyToAuthorName: '葉白', body: '葉白 必須', kind: 'reply' },
+      { authorName: '陳小美', replyToAuthorName: '白序言', body: '我也來參加', kind: 'reply' },
+    ]);
+  });
+
+  it('recognizes reply aria labels that include Facebook time suffixes', () => {
+    const html = `<div><a href="/host">主辦人</a><section>
+      <div class="row" aria-label="白序言回覆海綿寶的留言4小時前">
+        <a href="/bai">白序言</a><span dir="auto">時間尾碼回覆</span>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const result = parseFacebookPost(new JSDOM(html, { url: 'https://facebook.com/posts/timed-reply' }).window.document);
+    expect(result.comments).toHaveLength(0);
+    expect(result.replies).toMatchObject([
+      { authorName: '白序言', replyToAuthorName: '海綿寶', body: '時間尾碼回覆', kind: 'reply' },
+    ]);
+  });
+
+  it('does not drop a mobile main row or borrow text when an unlabelled reply fallback row is nested inside it', () => {
+    const html = `<div><a href="/host">主辦人</a><section>
+      <div class="main-row"><span id="main-author" dir="auto">阿明</span><span dir="auto">主留言內容</span>
+        <div class="reply-row"><span id="reply-author" dir="auto">小華</span><span dir="auto">巢狀回覆內容</span>
+          <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+        </div>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/nested-fallback' }).window.document;
+    document.querySelector<HTMLElement>('#main-author')!.getBoundingClientRect = () => ({ left: 20, width: 100 } as DOMRect);
+    document.querySelector<HTMLElement>('#reply-author')!.getBoundingClientRect = () => ({ left: 54, width: 100 } as DOMRect);
+    const result = parseFacebookPost(document);
+    expect(result.comments).toMatchObject([{ authorName: '阿明', body: '主留言內容' }]);
+    expect(result.replies).toMatchObject([{ authorName: '小華', body: '巢狀回覆內容' }]);
+    expect(result.comments[0]?.body).not.toContain('巢狀回覆內容');
+  });
+
+  it('does not export private-use placeholders, URLs, timestamps, or actions as a mobile author/body', () => {
+    const html = `<div><a href="/host">主辦人</a><section>
+      <div class="row"><span dir="auto">https://facebook.com/permalink.php?comment_id=1</span><span dir="auto">9 分鐘</span>
+        <span dir="auto">󳌘</span><img data-comment-media alt="貼圖" src="https://example.com/sticker.png">
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+      <div class="row"><span dir="auto">小美</span><span dir="auto">󳌘</span><img data-comment-media alt="圖片" src="https://example.com/photo.png">
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const result = parseFacebookPost(new JSDOM(html, { url: 'https://facebook.com/posts/media-only' }).window.document);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]).toMatchObject({ authorName: '小美', body: '', media: [{ kind: 'image', url: 'https://example.com/photo.png' }] });
+  });
+
+  it('keeps valid text while removing inline private-use placeholders', () => {
+    const markedHtml = `<article><a href="/host">主辦人</a>
+      <article data-comment-id="marked"><a href="/a">甲</a><span data-comment-body>我要參加󳌘</span></article>
+    </article>`;
+    const fallbackHtml = `<div><a href="/host">主辦人</a><section>
+      <div class="row"><span dir="auto">乙</span><span dir="auto">第二則󳌘留言</span>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const marked = parseFacebookPost(new JSDOM(markedHtml, { url: 'https://facebook.com/posts/private-use-marked' }).window.document);
+    const fallback = parseFacebookPost(new JSDOM(fallbackHtml, { url: 'https://facebook.com/posts/private-use-fallback' }).window.document);
+    expect(marked.comments[0]?.body).toBe('我要參加');
+    expect(fallback.comments[0]?.body).toBe('第二則留言');
+  });
+
+  it('does not borrow an unlabelled nested reply author into a media-only main comment', () => {
+    const html = `<div><a href="/host">主辦人</a><section>
+      <div class="main-row"><span id="main-media-author" dir="auto">阿明</span><img data-comment-media alt="貼圖" src="https://example.com/main.png">
+        <div class="reply-row"><span id="nested-media-reply-author" dir="auto">小華</span><span dir="auto">巢狀回覆內容</span>
+          <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+        </div>
+        <div role="button" aria-label="留言操作，按兩下即可按讚"></div>
+      </div>
+    </section></div>`;
+    const document = new JSDOM(html, { url: 'https://facebook.com/posts/media-main-with-reply' }).window.document;
+    document.querySelector<HTMLElement>('#main-media-author')!.getBoundingClientRect = () => ({ left: 20, width: 100 } as DOMRect);
+    document.querySelector<HTMLElement>('#nested-media-reply-author')!.getBoundingClientRect = () => ({ left: 54, width: 100 } as DOMRect);
+    const result = parseFacebookPost(document);
+    expect(result.comments).toMatchObject([{ authorName: '阿明', body: '', media: [{ kind: 'sticker', url: 'https://example.com/main.png' }] }]);
+    expect(result.replies).toMatchObject([{ authorName: '小華', body: '巢狀回覆內容' }]);
+  });
+
 });

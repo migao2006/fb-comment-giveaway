@@ -54,12 +54,59 @@ export function parseFacebookDate(value: string | null | undefined): string | un
   return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)).toISOString();
 }
 
+interface AriaCommentInfo {
+  authorName?: string;
+  replyToAuthorName?: string;
+  isReply: boolean;
+}
+
+const privateUseCharacters = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
+const privateUseCharactersGlobal = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+const urlLikeText = /^(?:https?:\/\/|www\.)|(?:facebook\.com|fb\.com)\//iu;
+const timeLikeText = /^(?:\d+\s*)?(?:剛剛|\d+\s*(?:分鐘|小時|天|週|星期|個月|年)(?:前)?|\d{1,2}:\d{2})$/u;
+
+function withoutPrivateUseCharacters(value: string | null | undefined): string {
+  return clean((value ?? '').replace(privateUseCharactersGlobal, ''));
+}
+
+function isUsablePersonName(value: string): boolean {
+  const text = clean(value);
+  return Boolean(text)
+    && !privateUseCharacters.test(text)
+    && !urlLikeText.test(text)
+    && !timeLikeText.test(text)
+    && !commentActionText.test(text)
+    && !/^(?:查看|顯示|更多|按兩下|留言操作|回覆這則)/u.test(text);
+}
+
+function ariaCommentInfo(node: Element): AriaCommentInfo {
+  const label = clean(node.getAttribute('aria-label'));
+  if (!label) return { isReply: false };
+  // VoiceOver on Facebook iPhone uses both "甲的留言" and
+  // "乙回覆甲的留言／回覆".  This is more reliable than the visual text
+  // because a nested reply row can otherwise inherit its parent text.
+  const reply = label.match(/^(.+?)\s*回覆\s*(.+?)\s*的(?:留言|回覆)(?:剛剛|\d+\s*(?:分鐘|小時|天|週|星期|個月|年)(?:前)?)?$/u);
+  if (reply) {
+    const authorName = clean(reply[1]);
+    const replyToAuthorName = clean(reply[2]);
+    return {
+      ...(isUsablePersonName(authorName) ? { authorName } : {}),
+      ...(isUsablePersonName(replyToAuthorName) ? { replyToAuthorName } : {}),
+      isReply: true,
+    };
+  }
+  const own = label.match(/^(.+?)\s*的(留言|回覆)(?:剛剛|\d+\s*(?:分鐘|小時|天|週|星期|個月|年)(?:前)?)?$/u);
+  if (!own) return { isReply: /回覆/u.test(label) };
+  const authorName = clean(own[1]);
+  return { ...(isUsablePersonName(authorName) ? { authorName } : {}), isReply: own[2] === '回覆' };
+}
+
 function findAuthor(node: Element): { name: string; url?: string } | undefined {
   const marked = node.querySelector<HTMLElement>('[data-comment-author]');
   if (marked) {
     const link = marked.matches('a') ? marked as HTMLAnchorElement : marked.querySelector<HTMLAnchorElement>('a[href]');
     const name = clean(marked.textContent);
-    if (name) {
+    if (isUsablePersonName(name)) {
       const url = canonicalProfileUrl(link?.getAttribute('href') ?? null);
       return url ? { name, url } : { name };
     }
@@ -68,14 +115,16 @@ function findAuthor(node: Element): { name: string; url?: string } | undefined {
   const link = links.find((item) => {
     const name = profileElementName(item);
     const href = item.getAttribute('href') ?? '';
-    return Boolean(name) && !/comment|reply|reaction|hashtag/i.test(href) && !/更多|回覆|讚|留言/.test(name);
+    return isUsablePersonName(name) && !/comment|reply|reaction|hashtag/i.test(href) && !/更多|回覆|讚|留言/.test(name);
   });
   if (link) {
     const url = canonicalProfileUrl(link.getAttribute('href'));
     const name = profileElementName(link);
     return url ? { name, url } : { name };
   }
-  const name = commentTextParts(node)[0];
+  const semanticName = ariaCommentInfo(node).authorName;
+  if (semanticName) return { name: semanticName };
+  const name = commentTextParts(node).find(isUsablePersonName);
   return name ? { name } : undefined;
 }
 
@@ -96,8 +145,8 @@ const commentActionText = /^(?:讚|回覆|留言|分享|更多|查看.*|已編�
 function commentTextParts(node: Element): string[] {
   const candidates = [...node.querySelectorAll<HTMLElement>('[dir="auto"]')]
     .filter((item) => !item.querySelector('[dir="auto"]'))
-    .map((item) => clean(item.textContent))
-    .filter((text) => text.length > 0 && !commentActionText.test(text));
+    .map((item) => withoutPrivateUseCharacters(item.textContent))
+    .filter((text) => text.length > 0 && !commentActionText.test(text) && !urlLikeText.test(text) && !timeLikeText.test(text));
   return [...new Set(candidates)];
 }
 
@@ -116,13 +165,22 @@ function mobileCommentRows(root: ParentNode): Element[] {
     for (let depth = 0; candidate && depth < 3; depth += 1, candidate = candidate.parentElement) {
       const parts = commentTextParts(candidate);
       const buttons = candidate.querySelectorAll('button, [role="button"]').length;
-      if (parts.length >= 2 && buttons <= 12) {
+      const hasExplicitMedia = Boolean(candidate.querySelector('[data-comment-media], img[alt*="貼圖"], img[alt*="圖片"], img[alt*="sticker" i], img[alt*="image" i]'));
+      // A media-only row still has its author, but only accept that relaxed
+      // shape at the action's immediate row. Otherwise a surrounding thread
+      // can accidentally combine another row's author with this row's sticker.
+      const mediaOnlyRow = parts.length >= 1 && hasExplicitMedia && signal.parentElement === candidate;
+      if ((parts.length >= 2 || mediaOnlyRow) && buttons <= 12) {
         rows.add(candidate);
         break;
       }
     }
   });
-  return [...rows].filter((row) => ![...rows].some((nested) => nested !== row && row.contains(nested)));
+  // A main mobile row legitimately contains its reply rows.  Keep both rows:
+  // the parser removes the nested row only while reading the parent's body.
+  // Dropping containers merely because they contain another detected row was
+  // the reason main comments disappeared whenever an iPhone reply was open.
+  return [...rows];
 }
 
 function indentedMobileReplyRows(nodes: Element[]): Set<Element> {
@@ -139,19 +197,24 @@ function indentedMobileReplyRows(nodes: Element[]): Set<Element> {
 
 function withoutNestedComments(node: Element): Element {
   const clone = node.cloneNode(true) as Element;
-  clone.querySelectorAll(semanticCommentSelector).forEach((nested) => nested.remove());
+  // Resolve actual nested rows before removing anything. Broad aria selectors
+  // also match the mobile "留言操作" button, so deleting selector matches
+  // first would erase the only signal for an unlabelled nested reply.
+  commentNodes(clone)
+    .filter((nested) => nested !== clone && clone.contains(nested))
+    .forEach((nested) => nested.remove());
   return clone;
 }
 
 function findBody(node: Element, authorName: string): string {
   const scope = withoutNestedComments(node);
   const marked = scope.querySelector<HTMLElement>('[data-comment-body]');
-  if (marked) return clean(marked.textContent);
-  const mobileParts = commentTextParts(scope).filter((text) => text !== authorName);
+  if (marked) return withoutPrivateUseCharacters(marked.textContent);
+  const mobileParts = commentTextParts(scope).filter((text) => text !== authorName && !privateUseCharacters.test(text));
   if (mobileParts.length) return mobileParts[0] ?? '';
   const candidates = [...scope.querySelectorAll<HTMLElement>('[lang], span')]
-    .map((item) => clean(item.textContent))
-    .filter((text) => text && text !== authorName && !/^(讚|回覆|更多|查看.*回覆)$/.test(text));
+    .map((item) => withoutPrivateUseCharacters(item.textContent))
+    .filter((text) => text && text !== authorName && !privateUseCharacters.test(text) && !urlLikeText.test(text) && !timeLikeText.test(text) && !/^(讚|回覆|更多|查看.*回覆)$/.test(text));
   return candidates.sort((a, b) => b.length - a.length)[0] ?? '';
 }
 
@@ -336,6 +399,7 @@ export function parseFacebookPost(
   const inferredReplies = indentedMobileReplyRows(nodes);
 
   nodes.forEach((node, index) => {
+    const ariaInfo = ariaCommentInfo(node);
     const author = findAuthor(node);
     if (!author?.name) { diagnostics.push(`第 ${index + 1} 個留言找不到作者`); return; }
     const id = node.getAttribute('data-comment-id') || renderedNodeId(node);
@@ -345,10 +409,12 @@ export function parseFacebookPost(
     const parentComment = node.parentElement?.closest('[data-comment-id]');
     const isReply = node.getAttribute('data-comment-depth') !== null
       ? Number(node.getAttribute('data-comment-depth')) > 0
-      : Boolean(parentComment) || /回覆/.test(node.getAttribute('aria-label') ?? '') || inferredReplies.has(node);
+      : Boolean(parentComment) || ariaInfo.isReply || inferredReplies.has(node);
     const timestampValue = timestamp?.getAttribute('datetime') || timestamp?.getAttribute('data-comment-time') || timestamp?.getAttribute('aria-label') || timestamp?.textContent;
     const createdAt = parseFacebookDate(timestampValue);
-    const replyToAuthorName = isReply && parentComment ? findAuthor(parentComment)?.name : undefined;
+    const replyToAuthorName = isReply
+      ? ariaInfo.replyToAuthorName ?? (parentComment ? findAuthor(parentComment)?.name : undefined)
+      : undefined;
     const commentUrl = findCommentUrl(node);
     const facebookId = node.getAttribute('data-comment-id') || undefined;
     const media = findMedia(node);

@@ -23,4 +23,14 @@ describe('full comment export', () => {
     expect(commentsToText([main, reply])).toContain('1. 主留言');
     expect(commentsToText([main, reply])).toContain('回覆對象：=危險名稱');
   });
+
+  it('persists snapshot verification metadata in partial exports', () => {
+    const metadata = {
+      snapshotId: '12', verificationStatus: 'visible-complete' as const, reportedCommentTotal: 179, parsedTotal: 171,
+    };
+    const csv = commentsToCsv([main], metadata);
+    expect(csv).toContain('"資料快照","驗證狀態","Facebook顯示總數","實際讀取總數"');
+    expect(csv).toContain('"12","visible-complete","179","171"');
+    expect(commentsToText([main], metadata)).toContain('驗證狀態：visible-complete');
+  });
 });

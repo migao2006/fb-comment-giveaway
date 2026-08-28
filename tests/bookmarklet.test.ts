@@ -15,6 +15,7 @@ describe('bookmarklet UI', () => {
     document.querySelector('#fb-comment-giveaway-bookmarklet')?.remove();
     document.body.innerHTML = post('one', '甲');
     history.replaceState({}, '', '/posts/fixture-one');
+    vi.stubGlobal('confirm', vi.fn(() => true));
     vi.resetModules();
   });
 
@@ -104,7 +105,7 @@ describe('bookmarklet UI', () => {
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
     expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.1');
+    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.2');
   });
 
   it('shows and searches the raw comment list independently of raffle filters', async () => {
@@ -159,7 +160,7 @@ describe('bookmarklet UI', () => {
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('尚有 2 則');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('仍多 2 則');
     expect(shadow.querySelector('[data-status]')!.textContent).not.toContain('✅ 已完成載入');
     vi.useRealTimers();
   });
@@ -209,13 +210,47 @@ describe('bookmarklet UI', () => {
     </article>`;
     const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    let downloadedFilename = '';
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloadedFilename = this.download; });
     await import('../src/bookmarklet');
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('2');
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    expect(downloadedFilename).toBe('facebook-comments-partial.csv');
     expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toMatch(/^已下載 2 則 CSV（資料快照 #\d+）。$/);
+  });
+
+  it('does not export partial data when the user cancels the confirmation', async () => {
+    vi.mocked(confirm).mockReturnValue(false);
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    createObjectUrl.mockClear();
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    expect(confirm).toHaveBeenCalled();
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  });
+
+  it('uses the normal CSV filename for a verified-complete snapshot', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
+      <div role="button" aria-label="1 則留言，按兩下即可查看留言"></div>
+      <article data-comment-id="main"><a href="/a">甲</a><span data-comment-body>參加</span></article>
+    </article>`;
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let downloadedFilename = '';
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloadedFilename = this.download; });
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    expect(downloadedFilename).toBe('facebook-comments.csv');
+    vi.useRealTimers();
   });
 
   it('invalidates a completed snapshot when Facebook adds comments before export', async () => {

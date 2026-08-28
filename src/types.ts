@@ -1,5 +1,7 @@
 export type CommentKind = 'comment' | 'reply';
 
+export type LoadVerificationStatus = 'verified-complete' | 'visible-complete' | 'partial';
+
 export interface FacebookComment {
   id: string;
   /** Stable discovery order within this local loading session. */

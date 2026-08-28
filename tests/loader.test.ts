@@ -106,7 +106,11 @@ describe('loadMoreComments', () => {
     const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
     await vi.runAllTimersAsync();
 
-    await expect(operation).resolves.toBe('controls-remain');
+    await expect(operation).resolves.toMatchObject({
+      reason: 'controls-remain',
+      pendingControls: true,
+      stablePasses: 0,
+    });
     expect(hasPendingExpansionControls(root)).toBe(true);
   });
 
@@ -189,5 +193,63 @@ describe('loadMoreComments', () => {
     await vi.runAllTimersAsync();
     await operation;
     expect(Math.max(...progress)).toBeGreaterThan(3);
+  });
+
+  it('requires a stable boundary and signature, not only a stable count', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 0 });
+    let reads = 0;
+    const operation = loadMoreComments(
+      document,
+      () => ({ commentCount: 7, boundary: `last-${Math.min(++reads, 2)}`, signature: `set-${Math.min(reads, 2)}` }),
+      () => undefined,
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({
+      reason: 'complete',
+      finalCount: 7,
+      boundary: 'last-2',
+      signature: 'set-2',
+      stablePasses: 2,
+    });
+  });
+
+  it('uses the nearest scrollable ancestor after positioning the comment root', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const container = document.createElement('div');
+    const root = document.createElement('article');
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 500 },
+      scrollTop: { configurable: true, writable: true, value: 400 },
+    });
+    container.style.overflowY = 'auto';
+    const scrollBy = vi.fn((optionsOrX?: ScrollToOptions | number) => {
+      if (typeof optionsOrX === 'object') container.scrollTop += Number(optionsOrX.top ?? 0);
+    });
+    const scrollTo = vi.fn((optionsOrX?: ScrollToOptions | number) => {
+      if (typeof optionsOrX === 'object') container.scrollTop = Number(optionsOrX.top ?? 0);
+    });
+    container.scrollBy = scrollBy as unknown as typeof container.scrollBy;
+    container.scrollTo = scrollTo as unknown as typeof container.scrollTo;
+    root.scrollIntoView = vi.fn();
+    container.append(root);
+    document.body.append(container);
+    const observedPositions: number[] = [];
+    const operation = loadMoreComments(root, () => {
+      observedPositions.push(container.scrollTop);
+      return 1;
+    }, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', scrollRoot: 'container' });
+    expect(root.scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+    expect(scrollBy).toHaveBeenCalled();
+    expect(observedPositions.filter((position) => position === 0)).toHaveLength(2);
+    expect(observedPositions.some((position) => position > 0 && position < 400)).toBe(true);
+    expect(observedPositions.some((position) => position >= 300)).toBe(true);
   });
 });

@@ -7,6 +7,24 @@ export interface LoadingProgress {
 
 export type LoadingEndReason = 'complete' | 'controls-remain' | 'limit-reached' | 'root-lost' | 'aborted';
 
+/** A caller may provide stable boundary/signature values in addition to the count. */
+export interface LoadingSnapshot {
+  commentCount: number;
+  boundary?: string;
+  signature?: string;
+}
+
+export interface LoadingResult {
+  reason: LoadingEndReason;
+  rounds: number;
+  stablePasses: number;
+  finalCount: number;
+  boundary?: string;
+  signature?: string;
+  pendingControls: boolean;
+  scrollRoot: 'window' | 'container';
+}
+
 const MORE_COMMENT_PATTERNS = [
   /^查看更多留言(?:（\d+）)?$/,
   /^顯示更多留言$/,
@@ -76,59 +94,136 @@ const pause = (milliseconds: number, signal: AbortSignal) => new Promise<void>((
   }, { once: true });
 });
 
+type ScrollTarget = Window | HTMLElement;
+
+function findScrollTarget(root: ParentNode): ScrollTarget {
+  let current = root instanceof HTMLElement ? root : root instanceof Element ? root.parentElement : null;
+  while (current) {
+    const style = getComputedStyle(current);
+    const canScroll = /(auto|scroll|overlay)/.test(style.overflowY)
+      && current.scrollHeight > current.clientHeight + 24;
+    if (canScroll) return current;
+    current = current.parentElement;
+  }
+  return window;
+}
+
+function scrollTargetBy(target: ScrollTarget, amount: number): void {
+  if (target === window) window.scrollBy({ top: amount, behavior: 'smooth' });
+  else target.scrollBy({ top: amount, behavior: 'smooth' });
+}
+
+function scrollStep(target: ScrollTarget): number {
+  return target instanceof HTMLElement
+    ? Math.max(target.clientHeight * 0.72, 64)
+    : Math.max(window.innerHeight * 0.72, 460);
+}
+
+function positionAtStart(root: ParentNode, target: ScrollTarget): void {
+  if (target instanceof HTMLElement) {
+    target.scrollTo?.({ top: 0, behavior: 'auto' });
+    if (root !== target && root instanceof HTMLElement) root.scrollIntoView?.({ block: 'start' });
+    return;
+  }
+  if (root instanceof HTMLElement) root.scrollIntoView?.({ block: 'start' });
+}
+
+function targetAtBottom(target: ScrollTarget): boolean {
+  if (target === window) return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 96;
+  if (target instanceof HTMLElement) return target.scrollTop + target.clientHeight >= target.scrollHeight - 96;
+  return false;
+}
+
+function normalizeSnapshot(value: number | LoadingSnapshot): LoadingSnapshot {
+  return typeof value === 'number' ? { commentCount: value } : value;
+}
+
+function sameSnapshot(left: LoadingSnapshot, right: LoadingSnapshot): boolean {
+  return left.commentCount === right.commentCount
+    && (left.boundary === undefined || right.boundary === undefined || left.boundary === right.boundary)
+    && (left.signature === undefined || right.signature === undefined || left.signature === right.signature);
+}
+
+function snapshotKey(snapshot: LoadingSnapshot): string {
+  return `${snapshot.commentCount}\u0000${snapshot.boundary ?? ''}\u0000${snapshot.signature ?? ''}`;
+}
+
 /**
  * Conservatively loads comments by clicking only known Traditional Chinese
  * controls. It stops on user abort, repeated no-progress rounds, or a hard cap.
  */
 export async function loadMoreComments(
   root: ParentNode,
-  getCommentCount: () => number,
+  getSnapshot: () => number | LoadingSnapshot,
   onProgress: (progress: LoadingProgress) => void,
   signal: AbortSignal,
-): Promise<LoadingEndReason> {
-  const maxRounds = 60;
-  let settledBottomRounds = 0;
-  let previousCount = getCommentCount();
-  let previousDocumentHeight = document.documentElement.scrollHeight;
-  const clickedAtCount = new WeakMap<HTMLElement, number>();
+): Promise<LoadingResult> {
+  const maxRounds = 120;
+  const clickedAtSnapshot = new WeakMap<HTMLElement, string>();
+  const scrollTarget = findScrollTarget(root);
+  let rounds = 0;
+  let stablePasses = 0;
+  let previous: LoadingSnapshot;
+  let completedPassSnapshot: LoadingSnapshot | undefined;
 
-  if (root instanceof HTMLElement) root.scrollIntoView?.({ block: 'start' });
+  const result = (reason: LoadingEndReason, pendingControls = hasPendingExpansionControls(root)): LoadingResult => ({
+    reason,
+    rounds: Math.min(rounds, maxRounds),
+    stablePasses,
+    finalCount: previous.commentCount,
+    ...(previous.boundary === undefined ? {} : { boundary: previous.boundary }),
+    ...(previous.signature === undefined ? {} : { signature: previous.signature }),
+    pendingControls,
+    scrollRoot: scrollTarget instanceof HTMLElement ? 'container' : 'window',
+  });
+
+  positionAtStart(root, scrollTarget);
   await pause(250, signal);
+  previous = normalizeSnapshot(getSnapshot());
 
-  for (let round = 1; round <= maxRounds && !signal.aborted; round += 1) {
-    if (root instanceof Element && !root.isConnected) return 'root-lost';
-    const buttons = findExpansionButtons(root).filter((button) => clickedAtCount.get(button) !== previousCount).slice(0, 4);
-    buttons.forEach((button) => { clickedAtCount.set(button, previousCount); button.click(); });
-    window.scrollBy({ top: Math.max(window.innerHeight * 0.72, 460), behavior: 'smooth' });
+  for (rounds = 1; rounds <= maxRounds && !signal.aborted; rounds += 1) {
+    if (root instanceof Element && !root.isConnected) return result('root-lost', false);
+    const key = snapshotKey(previous);
+    const buttons = findExpansionButtons(root)
+      .filter((button) => clickedAtSnapshot.get(button) !== key)
+      .slice(0, 4);
+    buttons.forEach((button) => {
+      clickedAtSnapshot.set(button, key);
+      button.click();
+    });
+    scrollTargetBy(scrollTarget, scrollStep(scrollTarget));
     onProgress({
-      round,
+      round: rounds,
       clicked: buttons.length,
-      commentCount: previousCount,
+      commentCount: previous.commentCount,
       message: buttons.length ? '正在等待 Facebook 展開留言或回覆…' : '安全捲動中，正在尋找更多留言…',
     });
     await pause(buttons.length ? 1100 : 750, signal);
-    const currentCount = getCommentCount();
-    const currentDocumentHeight = document.documentElement.scrollHeight;
-    const reachedBottom = window.scrollY + window.innerHeight >= currentDocumentHeight - 96;
-    const pageGrew = currentDocumentHeight > previousDocumentHeight + 8;
-    const commentsGrew = currentCount > previousCount;
-    settledBottomRounds = reachedBottom && !pageGrew && !commentsGrew ? settledBottomRounds + 1 : 0;
-    previousCount = currentCount;
-    previousDocumentHeight = currentDocumentHeight;
-    onProgress({ round, clicked: buttons.length, commentCount: currentCount, message: `已辨識 ${currentCount} 則留言（含回覆）` });
-    if (settledBottomRounds >= 3) {
+    if (signal.aborted) break;
+    if (root instanceof Element && !root.isConnected) return result('root-lost', false);
+    const current = normalizeSnapshot(getSnapshot());
+    const settledAtBottom = targetAtBottom(scrollTarget) && sameSnapshot(previous, current);
+    previous = current;
+    onProgress({ round: rounds, clicked: buttons.length, commentCount: current.commentCount, message: `已辨識 ${current.commentCount} 則留言（含回覆）` });
+    if (settledAtBottom) {
       const pending = findExpansionButtons(root, false);
-      const untried = pending.find((button) => clickedAtCount.get(button) !== currentCount);
-      if (untried) {
-        untried.scrollIntoView?.({ block: 'center' });
-        settledBottomRounds = 0;
+      const freshControl = pending.find((button) => clickedAtSnapshot.get(button) !== snapshotKey(current));
+      if (freshControl) {
+        freshControl.scrollIntoView?.({ block: 'center' });
+        stablePasses = 0;
+        completedPassSnapshot = undefined;
         await pause(350, signal);
-      } else if (pending.length) {
-        return 'controls-remain';
-      } else {
-        return 'complete';
+      } else if (pending.length) return result('controls-remain', true);
+      else {
+        stablePasses = completedPassSnapshot && sameSnapshot(completedPassSnapshot, current) ? stablePasses + 1 : 1;
+        completedPassSnapshot = current;
+        if (stablePasses >= 2) return result('complete', false);
+        positionAtStart(root, scrollTarget);
+        onProgress({ round: rounds, clicked: 0, commentCount: current.commentCount, message: '第一輪已到底，正在從留言起點進行完整核對…' });
+        await pause(350, signal);
+        previous = normalizeSnapshot(getSnapshot());
       }
     }
   }
-  return signal.aborted ? 'aborted' : 'limit-reached';
+  return result(signal.aborted ? 'aborted' : 'limit-reached');
 }

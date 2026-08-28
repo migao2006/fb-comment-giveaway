@@ -5,7 +5,7 @@ import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from 
 import type { FacebookComment, LoadVerificationStatus, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.3.3';
+const TOOL_VERSION = '0.3.4';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -30,18 +30,17 @@ function mount(): void {
       <div class="header-actions"><button class="icon" data-action="collapse" aria-label="收合面板">−</button><button class="icon" data-action="close" aria-label="關閉面板">×</button></div>
     </header>
     <div class="body">
-      <section class="notice"><b>先把留言排序切成「所有留言」</b><span>工具只會讀取這個頁面已載入的內容。</span></section>
+      <section class="notice"><b>先把留言排序切成「所有留言」</b><span>主留言模式：只載入主留言，不展開、不保存回覆。</span></section>
       <h2 class="section-title">留言資料</h2>
       <section class="stats" aria-live="polite">
         <div><strong data-stat="comments">0</strong><span>主留言</span></div>
-        <div><strong data-stat="replies">0</strong><span>回覆</span></div>
-        <div><strong data-stat="total">0</strong><span>總留言</span></div>
-        <div><strong data-stat="loaded">0</strong><span>已載入</span></div>
+        <div><strong data-stat="authors">0</strong><span>主留言者</span></div>
+        <div><strong data-stat="duplicates">0</strong><span>重複留言者</span></div>
       </section>
       <p class="coverage hidden" data-coverage></p>
       <section class="load-row">
         <button class="button secondary" data-action="scan">重新掃描</button>
-        <button class="button primary" data-action="load">載入全部留言</button>
+        <button class="button primary" data-action="load">載入全部主留言</button>
         <button class="button danger hidden" data-action="stop">停止</button>
       </section>
       <p class="status" data-status aria-live="polite">準備掃描目前頁面…</p>
@@ -50,8 +49,8 @@ function mount(): void {
         <div><button class="button error-button" data-action="copy-diagnostic">複製診斷資訊</button><span data-copy-state></span></div>
       </section>
       <details class="comments-section" open>
-        <summary>完整留言 <span data-comment-count>0 則</span></summary>
-        <label class="comment-search">搜尋完整留言<input name="commentSearch" type="search" placeholder="搜尋留言者、內容或回覆對象"></label>
+        <summary>完整主留言 <span data-comment-count>0 則</span></summary>
+        <label class="comment-search">搜尋完整主留言<input name="commentSearch" type="search" placeholder="搜尋留言者或留言內容"></label>
         <p class="comment-list-summary" data-comment-list-summary>尚無留言資料</p>
         <div class="comment-list" data-comment-list></div>
         <div class="raw-export-row">
@@ -97,13 +96,11 @@ function mount(): void {
   let loadOutcome = '尚未執行';
   let verificationStatus: LoadVerificationStatus = 'partial';
   let stablePasses = 0;
-  let reportedCommentTotal: number | undefined;
   let snapshotRevision = 0;
   let dataSnapshot = {
     id: '0',
     capturedAt: new Date().toISOString(),
     parsed: cloneParsedPost(parsed),
-    reportedCommentTotal: undefined as number | undefined,
     loadOutcome,
     pendingExpansionControls: false,
     verificationStatus: verificationStatus as LoadVerificationStatus,
@@ -132,7 +129,6 @@ function mount(): void {
       id: String(snapshotRevision),
       capturedAt: new Date().toISOString(),
       parsed: cloneParsedPost(parsed),
-      reportedCommentTotal,
       loadOutcome,
       pendingExpansionControls: postRoot ? hasPendingExpansionControls(postRoot) : false,
       verificationStatus,
@@ -143,22 +139,26 @@ function mount(): void {
   function revalidateCompletedSnapshot(): boolean {
     if (dataSnapshot.verificationStatus === 'partial') return false;
     const postRoot = findFacebookPostRoot(document, activePage);
-    const liveReportedTotal = postRoot ? findReportedCommentTotal(postRoot) : undefined;
-    const pendingControls = postRoot ? hasPendingExpansionControls(postRoot) : false;
-    const snapshotTotal = dataSnapshot.parsed.comments.length + dataSnapshot.parsed.replies.length;
-    const stillVerified = liveReportedTotal !== undefined && liveReportedTotal === snapshotTotal && !pendingControls;
-    const stillVisibleComplete = !pendingControls && dataSnapshot.verificationStatus === 'visible-complete'
-      && liveReportedTotal === dataSnapshot.reportedCommentTotal;
-    if (stillVerified) return true;
-    if (stillVisibleComplete) return false;
-    reportedCommentTotal = liveReportedTotal;
-    loadOutcome = pendingControls ? '尚有留言未展開'
-      : liveReportedTotal === undefined ? '無法驗證完整' : '載入未完整';
+    if (!postRoot) {
+      loadOutcome = '找不到目前貼文';
+      verificationStatus = 'partial';
+      stablePasses = 0;
+      invalidateResult();
+      commitDataSnapshot();
+      refreshSummary('⚠️ 找不到目前貼文，請重新開啟貼文並載入全部主留言。');
+      return false;
+    }
+    const pendingControls = hasPendingExpansionControls(postRoot);
+    const liveComments = parseFacebookPost(postRoot, activePage, { includeReplies: false }).comments;
+    const hasNewMainComments = containsUnseenComments(dataSnapshot.parsed.comments, liveComments);
+    if (!pendingControls && !hasNewMainComments && dataSnapshot.verificationStatus === 'visible-complete') return true;
+    loadOutcome = pendingControls ? '尚有主留言未展開' : '主留言已更新';
     verificationStatus = 'partial';
     stablePasses = 0;
     invalidateResult();
-    commitDataSnapshot(postRoot);
-    refreshSummary('⚠️ Facebook 留言已更新，請再次執行「載入全部留言」。');
+    if (hasNewMainComments) scan('⚠️ Facebook 主留言已更新，請再次執行「載入全部主留言」。', 'accumulate', postRoot);
+    else commitDataSnapshot(postRoot);
+    refreshSummary('⚠️ Facebook 主留言已更新，請再次執行「載入全部主留言」。');
     return false;
   }
 
@@ -184,29 +184,16 @@ function mount(): void {
     const duplicatePeople = allAuthors.filter((person) => person.comments.length > 1).length;
     const missingProfiles = snapshotParsed.comments.filter((comment) => !comment.authorUrl).length;
     query<HTMLElement>('[data-stat="comments"]').textContent = String(snapshotParsed.comments.length);
-    query<HTMLElement>('[data-stat="replies"]').textContent = String(snapshotParsed.replies.length);
-    const parsedTotal = snapshotParsed.comments.length + snapshotParsed.replies.length;
-    query<HTMLElement>('[data-stat="total"]').textContent = String(parsedTotal);
-    query<HTMLElement>('[data-stat="loaded"]').textContent = String(parsedTotal);
+    query<HTMLElement>('[data-stat="authors"]').textContent = String(allAuthors.length);
+    query<HTMLElement>('[data-stat="duplicates"]').textContent = String(duplicatePeople);
+    const parsedTotal = snapshotParsed.comments.length;
     const coverage = query<HTMLElement>('[data-coverage]');
-    const snapshotReportedTotal = dataSnapshot.reportedCommentTotal;
-    coverage.classList.toggle('hidden', snapshotReportedTotal === undefined && !hasLoadingAttempt);
-    if (snapshotReportedTotal === undefined) {
-      coverage.classList.add('partial');
-      coverage.textContent = hasLoadingAttempt
-        ? `${dataSnapshot.verificationStatus === 'visible-complete' ? '⚠️ 可見留言已載完' : '尚未完成驗證'} · 已讀取 ${parsedTotal} 則 · Facebook 未提供可核對的總數`
-        : '';
-    } else {
-      const countDifference = parsedTotal - snapshotReportedTotal;
-      coverage.classList.toggle('partial', dataSnapshot.verificationStatus !== 'verified-complete');
-      coverage.textContent = dataSnapshot.verificationStatus === 'verified-complete'
-        ? `✅ 已驗證完整 · Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則`
-        : countDifference < 0
-          ? `⚠️ 可見留言已載完 · Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 尚差 ${Math.abs(countDifference)} 則可能無法存取`
-          : countDifference > 0
-            ? `Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 多出 ${countDifference} 則，請檢查重複或回覆分類`
-            : `⚠️ Facebook 顯示 ${snapshotReportedTotal} 則 · 已讀取 ${parsedTotal} 則 · 數量一致，但載入流程尚未完成驗證`;
-    }
+    coverage.classList.toggle('hidden', !hasLoadingAttempt);
+    coverage.classList.toggle('partial', dataSnapshot.verificationStatus !== 'visible-complete');
+    coverage.textContent = !hasLoadingAttempt ? ''
+      : dataSnapshot.verificationStatus === 'visible-complete'
+        ? `✅ 主留言載入完成 · 已讀取 ${parsedTotal} 則主留言 · 回覆已忽略`
+        : `⚠️ 主留言尚未完成載入 · 目前取得 ${parsedTotal} 則 · 回覆已忽略`;
     const missingDates = (filters.startDate || filters.endDate) ? snapshotParsed.comments.filter((comment) => !comment.createdAt).length : 0;
     query<HTMLElement>('[data-candidates]').textContent = `符合條件：${eligible.length} 個抽獎資格 · ${allAuthors.length} 位主留言者${duplicatePeople ? ` · ${duplicatePeople} 位重複留言` : ''}${snapshotParsed.postAuthor ? ` · 貼文作者：${snapshotParsed.postAuthor.name}` : ''}${missingDates ? ` · ${missingDates} 則無時間已排除` : ''}${missingProfiles ? ` · ${missingProfiles} 則缺個人頁連結，無法帳號去重` : ''}`;
     drawButton.disabled = eligible.length === 0;
@@ -217,29 +204,21 @@ function mount(): void {
   function renderFullComments(): void {
     const all = orderedComments(dataSnapshot.parsed);
     const term = query<HTMLInputElement>('[name="commentSearch"]').value.trim().toLocaleLowerCase();
-    const visible = term ? all.filter((comment) => [comment.authorName, comment.body, comment.replyToAuthorName ?? '']
+    const visible = term ? all.filter((comment) => [comment.authorName, comment.body]
       .some((value) => value.toLocaleLowerCase().includes(term))) : all;
     query<HTMLElement>('[data-comment-count]').textContent = `${all.length} 則`;
-    const reported = dataSnapshot.reportedCommentTotal;
-    const reportedSummary = reported === undefined
-      ? 'Facebook 未提供可核對總數'
-      : all.length < reported
-        ? `Facebook 顯示 ${reported} 則，目前取得 ${all.length} 則，尚差 ${reported - all.length} 則`
-        : all.length > reported
-          ? `Facebook 顯示 ${reported} 則，目前取得 ${all.length} 則，讀取數多 ${all.length - reported} 則`
-          : `Facebook 顯示 ${reported} 則，數量一致`;
     query<HTMLElement>('[data-comment-list-summary]').textContent = all.length
-      ? `顯示 ${visible.length}／${all.length} 則；${reportedSummary}。搜尋只影響畫面，不影響 CSV 或抽獎。`
-      : '尚無留言資料';
+      ? `顯示 ${visible.length}／${all.length} 則主留言；回覆不讀取。搜尋只影響畫面，不影響 CSV 或抽獎。`
+      : '尚無主留言資料';
     const list = query<HTMLElement>('[data-comment-list]');
     list.replaceChildren();
     visible.forEach((comment, index) => {
       const card = document.createElement('article');
-      card.className = `comment-card ${comment.kind}`;
+      card.className = 'comment-card comment';
       const heading = document.createElement('div');
       heading.className = 'comment-heading';
       const kind = document.createElement('b');
-      kind.textContent = comment.kind === 'reply' ? '回覆' : '主留言';
+      kind.textContent = '主留言';
       const sequence = document.createElement('span');
       sequence.textContent = `#${comment.sequence ?? index + 1}`;
       heading.append(kind, sequence);
@@ -248,7 +227,7 @@ function mount(): void {
       const body = document.createElement('p');
       body.textContent = comment.body || mediaLabel(comment) || '（無文字內容）';
       const meta = document.createElement('small');
-      meta.textContent = [comment.replyToAuthorName ? `回覆 ${comment.replyToAuthorName}` : '', comment.createdAt ? formatLocalDate(comment.createdAt) : '', mediaLabel(comment)]
+      meta.textContent = [comment.createdAt ? formatLocalDate(comment.createdAt) : '', mediaLabel(comment)]
         .filter(Boolean).join(' · ');
       card.append(heading, author, body);
       if (meta.textContent) card.append(meta);
@@ -280,9 +259,8 @@ function mount(): void {
     if (!suppliedRootConnected) mode = 'replace';
     const parseRoot = pageChanged || !suppliedRootConnected ? locatedPostRoot : root;
     const currentPostRoot = locatedPostRoot ?? parseRoot;
-    reportedCommentTotal = currentPostRoot ? findReportedCommentTotal(currentPostRoot) : undefined;
     const current = parseRoot
-      ? parseFacebookPost(parseRoot, activePage)
+      ? parseFacebookPost(parseRoot, activePage, { includeReplies: false })
       : { comments: [], replies: [], diagnostics: ['目前找不到可辨識的貼文留言區。'] };
     const beforeDataset = storeFingerprint(rawCommentStore);
     const beforeAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
@@ -315,8 +293,8 @@ function mount(): void {
     const accumulated = [...rawCommentStore.values()];
     parsed = {
       ...current,
-      comments: accumulated.filter((comment) => comment.kind === 'comment'),
-      replies: accumulated.filter((comment) => comment.kind === 'reply'),
+      comments: accumulated,
+      replies: [],
     };
     const afterDataset = storeFingerprint(rawCommentStore);
     const afterAuthor = parsed.postAuthor?.url ?? parsed.postAuthor?.name;
@@ -326,7 +304,7 @@ function mount(): void {
     refreshSummary(parsed.comments.length ? message : diagnostic ?? '目前找不到可辨識的留言。');
     errorCard.classList.toggle('hidden', parsed.comments.length > 0);
     query<HTMLElement>('[data-error-message]').textContent = diagnostic ?? 'Facebook 頁面結構可能已更新，或留言尚未載入。';
-    return parsed.comments.length + parsed.replies.length;
+    return parsed.comments.length;
   }
 
   async function startLoading(): Promise<void> {
@@ -354,7 +332,6 @@ function mount(): void {
           const records = orderedComments(parsed);
           return {
             commentCount,
-            ...(reportedCommentTotal === undefined ? {} : { expectedCount: reportedCommentTotal }),
             boundary: `${records[0]?.id ?? ''}\n${records.at(-1)?.id ?? ''}`,
             signature: storeFingerprint(rawCommentStore),
           };
@@ -376,50 +353,36 @@ function mount(): void {
         const committedRoot = findFacebookPostRoot(document, activePage);
         commitDataSnapshot(committedRoot);
         refreshSummary();
-        status.textContent = '⚠️ 已切換到其他貼文，舊貼文載入已停止；請重新載入目前貼文';
+        status.textContent = '⚠️ 已切換到其他貼文，舊貼文載入已停止；請重新載入目前貼文的主留言';
         return;
       }
-      const terminalOutcome = endReason === 'controls-remain' ? '尚有留言未展開'
+      const terminalOutcome = endReason === 'controls-remain' ? '尚有主留言未展開'
         : endReason === 'limit-reached' ? '達到輪數上限'
           : endReason === 'root-lost' ? '留言區已更新'
             : endReason === 'aborted' ? '使用者停止' : '驗證載入結果中';
       loadOutcome = terminalOutcome;
       scan(loadOutcome, 'accumulate', postRoot);
       loadOutcome = terminalOutcome;
-      const parsedTotal = parsed.comments.length + parsed.replies.length;
-      const difference = reportedCommentTotal === undefined ? undefined : parsedTotal - reportedCommentTotal;
+      const parsedTotal = parsed.comments.length;
       const latestPostRoot = findFacebookPostRoot(document, activePage) ?? postRoot;
       const pendingControls = loadingResult.pendingControls || hasPendingExpansionControls(latestPostRoot);
-      const verifiedComplete = endReason === 'complete' && difference === 0 && !pendingControls;
       const visibleComplete = endReason === 'complete' && stablePasses >= 2 && !pendingControls;
-      verificationStatus = verifiedComplete ? 'verified-complete' : visibleComplete ? 'visible-complete' : 'partial';
-      loadOutcome = verifiedComplete ? '載入完成'
-        : visibleComplete ? '可見留言已載完'
+      verificationStatus = visibleComplete ? 'visible-complete' : 'partial';
+      loadOutcome = visibleComplete ? '主留言載入完成'
         : endReason === 'root-lost' ? '留言區已更新'
           : endReason === 'aborted' ? '使用者停止'
             : endReason === 'limit-reached' ? '達到輪數上限'
-              : endReason === 'controls-remain' || pendingControls ? '尚有留言未展開'
-                : difference === undefined ? '無法驗證完整'
-                  : difference !== 0 ? '載入未完整'
-                    : loadOutcome;
+              : endReason === 'controls-remain' || pendingControls ? '尚有主留言未展開'
+                : '載入未完整';
       commitDataSnapshot(latestPostRoot);
       refreshSummary();
-      status.textContent = verifiedComplete
-        ? `✅ 已完成載入，共取得 ${parsed.comments.length} 則主留言、${parsed.replies.length} 則回覆，總計 ${parsedTotal} 則留言`
-        : visibleComplete && difference !== undefined && difference < 0
-          ? `⚠️ 可見留言已載完：${parsed.comments.length} 則主留言、${parsed.replies.length} 則回覆，共 ${parsedTotal} 則；Facebook 顯示仍多 ${Math.abs(difference)} 則可能無法存取`
-          : visibleComplete && difference !== undefined && difference > 0
-            ? `⚠️ 載入數量異常：已讀取 ${parsedTotal} 則，比 Facebook 顯示多 ${difference} 則；請檢查重複或回覆分類`
-          : visibleComplete
-            ? `⚠️ 可見留言已載完，共 ${parsedTotal} 則；Facebook 未提供可核對總數，匯出將標記為 partial`
-        : endReason === 'root-lost' ? '⚠️ 留言區已更新，已改讀目前貼文，請再次載入全部留言'
+      status.textContent = visibleComplete
+        ? `✅ 主留言載入完成，共取得 ${parsedTotal} 則主留言；回覆未讀取`
+        : endReason === 'root-lost' ? '⚠️ 留言區已更新，已改讀目前貼文，請再次載入全部主留言'
           : endReason === 'aborted' ? '已停止載入'
             : endReason === 'limit-reached' ? '⚠️ 已達載入輪數上限，請再次載入'
-              : pendingControls ? '⚠️ 頁面仍有留言或回覆尚未展開，請再次載入'
-                : difference === undefined ? '⚠️ 已載入頁面可展開內容，但 Facebook 未提供總數，無法確認是否完整'
-                  : difference < 0 ? `⚠️ 尚有 ${Math.abs(difference)} 則留言未載入或未展開`
-                    : difference > 0 ? `⚠️ 已讀取數量比 Facebook 顯示多 ${difference} 則，請檢查資料`
-                      : loadOutcome;
+              : pendingControls ? '⚠️ 頁面仍有主留言尚未展開，請再次載入'
+                : '⚠️ 主留言載入尚未完成，請再次載入';
     } finally {
       loadController = undefined;
       loadButton.classList.remove('hidden');
@@ -508,17 +471,13 @@ function mount(): void {
         return { actionLeft: Math.round(rect.left), actionWidth: Math.round(rect.width), textRects };
       });
     const snapshotParsed = dataSnapshot.parsed;
-    const detectedTotal = dataSnapshot.reportedCommentTotal;
-    const parsedTotal = snapshotParsed.comments.length + snapshotParsed.replies.length;
-    const reportedGap = detectedTotal ? Math.max(0, detectedTotal - parsedTotal) : 0;
-    const reportedDifference = detectedTotal === undefined ? null : parsedTotal - detectedTotal;
+    const parsedTotal = snapshotParsed.comments.length;
     const details = {
       diagnosticVersion: 5,
       toolVersion: TOOL_VERSION,
       code: !snapshotParsed.comments.length
         ? 'POST_NOT_FOUND'
-        : dataSnapshot.verificationStatus === 'verified-complete' && !dataSnapshot.pendingExpansionControls && reportedDifference === 0 ? 'LOAD_COMPLETE'
-          : dataSnapshot.verificationStatus === 'visible-complete' ? 'LOAD_VISIBLE_COMPLETE'
+        : dataSnapshot.verificationStatus === 'visible-complete' && !dataSnapshot.pendingExpansionControls ? 'LOAD_COMPLETE'
           : dataSnapshot.loadOutcome === '無法驗證完整' ? 'LOAD_UNVERIFIED'
             : dataSnapshot.loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
               : dataSnapshot.loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
@@ -532,9 +491,8 @@ function mount(): void {
       parsedComments: snapshotParsed.comments.length,
       parsedReplies: snapshotParsed.replies.length,
       parsedTotal,
-      reportedCommentTotal: detectedTotal ?? null,
-      reportedGap,
-      reportedDifference,
+      loadingMode: 'main-comments-only',
+      reportedTotalIncludesReplies: true,
       loadingAttempted: hasLoadingAttempt,
       pendingExpansionControls: dataSnapshot.pendingExpansionControls,
       verificationStatus: dataSnapshot.verificationStatus,
@@ -576,22 +534,20 @@ function mount(): void {
     return {
       snapshotId: dataSnapshot.id,
       verificationStatus: dataSnapshot.verificationStatus,
-      ...(dataSnapshot.reportedCommentTotal !== undefined ? { reportedCommentTotal: dataSnapshot.reportedCommentTotal } : {}),
       parsedTotal: comments.length,
     };
   }
 
   function confirmPartialUse(action: '下載' | '抽獎'): boolean {
-    if (dataSnapshot.verificationStatus === 'verified-complete') return true;
-    const total = dataSnapshot.parsed.comments.length + dataSnapshot.parsed.replies.length;
-    const gap = dataSnapshot.reportedCommentTotal === undefined ? undefined : Math.max(0, dataSnapshot.reportedCommentTotal - total);
-    return confirm(`目前是部分資料：已讀取 ${total} 則${gap ? `，Facebook 顯示仍多 ${gap} 則可能無法存取` : ''}。檔案會標記為 partial，仍要${action}嗎？`);
+    if (dataSnapshot.verificationStatus === 'visible-complete') return true;
+    const total = dataSnapshot.parsed.comments.length;
+    return confirm(`目前主留言尚未完成載入，已讀取 ${total} 則。檔案會標記為 partial，仍要${action}嗎？`);
   }
 
   async function exportCommentsCsv(): Promise<void> {
     const comments = ensureCommentData();
     if (!comments || !confirmPartialUse('下載')) return;
-    const partial = dataSnapshot.verificationStatus !== 'verified-complete';
+    const partial = dataSnapshot.verificationStatus !== 'visible-complete';
     const filename = partial ? 'facebook-comments-partial.csv' : 'facebook-comments.csv';
     const state = query<HTMLElement>('[data-comment-copy-state]');
     try {
@@ -695,6 +651,21 @@ function commentFingerprint(comment: FacebookComment): string {
   return `${comment.kind}\n${comment.authorUrl ?? comment.authorName}\n${comment.body}\n${comment.createdAt ?? ''}\n${comment.replyToAuthorName ?? ''}\n${mediaLabel(comment)}`;
 }
 
+function containsUnseenComments(snapshot: FacebookComment[], live: FacebookComment[]): boolean {
+  const remaining = new Map<string, number>();
+  snapshot.forEach((comment) => {
+    const fingerprint = commentFingerprint(comment);
+    remaining.set(fingerprint, (remaining.get(fingerprint) ?? 0) + 1);
+  });
+  return live.some((comment) => {
+    const fingerprint = commentFingerprint(comment);
+    const count = remaining.get(fingerprint) ?? 0;
+    if (count <= 0) return true;
+    remaining.set(fingerprint, count - 1);
+    return false;
+  });
+}
+
 function sameRenderedRecord(previous: FacebookComment, current: FacebookComment): boolean {
   if (previous.kind !== current.kind
     || (previous.authorUrl ?? previous.authorName) !== (current.authorUrl ?? current.authorName)
@@ -747,23 +718,6 @@ function roleCounts(): Record<string, number> {
     counts[role] = (counts[role] ?? 0) + 1;
   });
   return counts;
-}
-
-function findReportedCommentTotal(root: ParentNode): number | undefined {
-  const labeledTotals = [...root.querySelectorAll<HTMLElement>('[aria-label]')]
-    .flatMap((node) => {
-      const label = (node.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim();
-      const embedded = label.match(/(\d[\d,.]*)\s*則?留言(?:，|。|$)/u)?.[1];
-      const actionCount = /^(?:留言|comments?)$/iu.test(label)
-        ? (node.textContent ?? '').replace(/\s+/g, '').match(/^\d[\d,.]*$/)?.[0]
-        : undefined;
-      return [embedded, actionCount].filter((value): value is string => Boolean(value));
-    });
-  const totals = labeledTotals
-    .filter((value): value is string => Boolean(value))
-    .map((value) => Number.parseInt(value.replace(/[,.]/g, ''), 10))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  return totals.length ? Math.max(...totals) : undefined;
 }
 
 function clampNumber(value: string, minimum: number, maximum: number): number {
@@ -841,6 +795,7 @@ async function copyText(value: string): Promise<void> {
 function panelStyles(): string { return `<style>
 :host{all:initial;position:fixed;z-index:2147483647;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#19201e}
 :host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{display:flex;flex-direction:column;gap:4px;background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.notice span{color:#69716d}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.coverage{margin:-4px 0 12px;padding:8px 10px;border-radius:9px;background:#e7f2ed;color:#174f3f;font:700 11px/1.4 sans-serif}.coverage.partial{background:#fff0d8;color:#7a4b00}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}.footer-note{margin:13px 4px 0;color:#777e7a;font-size:10px;line-height:1.45}
+.stats{grid-template-columns:repeat(3,1fr)}
 .diagnostic-row{display:flex;align-items:center;gap:8px;margin:-5px 2px 10px}.diagnostic-link{border:0;background:transparent;color:#174f3f;padding:3px 0;text-decoration:underline;font:700 11px sans-serif}.diagnostic-row span{font-size:10px;color:#59625e}.bottom-diagnostic{display:flex;align-items:center;gap:8px;margin-top:12px}.bottom-diagnostic button{min-height:44px}.bottom-diagnostic span{font-size:10px;color:#59625e}.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}.form-grid input{box-sizing:border-box;min-width:0}
 details{margin-top:10px}summary span{float:right;color:#69716d;font-size:11px}.comment-search{display:flex;flex-direction:column;gap:5px;margin-top:12px;color:#616b66;font-size:11px}.comment-search input{box-sizing:border-box;width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.comment-list-summary{margin:9px 0;color:#69716d;font-size:10px}.comment-list{display:flex;flex-direction:column;gap:7px;max-height:310px;overflow:auto;overscroll-behavior:contain}.comment-card{padding:9px;border:1px solid #e3e5e1;border-radius:10px;background:#fbfbf8}.comment-card.reply{margin-left:18px;border-left:3px solid #8aafa2}.comment-heading{display:flex;justify-content:space-between;color:#174f3f;font-size:10px}.comment-card strong{display:block;margin-top:4px;font-size:12px}.comment-card p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.45}.comment-card small{display:block;color:#69716d;font-size:10px}.comment-card a{display:inline-block;margin-top:5px;color:#174f3f;font-size:10px}.raw-export-row{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.raw-export-row .primary{grid-column:1/-1}.copy-state{margin:7px 0 0;color:#174f3f;font-size:10px}.advanced{padding:10px;background:#f2f1eb}
 .section-title{margin:13px 2px -4px;font-size:13px;color:#174f3f}

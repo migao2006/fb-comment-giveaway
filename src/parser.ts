@@ -371,6 +371,7 @@ export function findFacebookPostRoot(
 export function parseFacebookPost(
   root: ParentNode = document,
   sourceUrl = typeof location === 'undefined' ? '' : location.href,
+  options: { includeReplies?: boolean } = {},
 ): ParsedFacebookPost {
   const scope = findFacebookPostRoot(root, sourceUrl);
   const diagnostics: string[] = [];
@@ -400,16 +401,17 @@ export function parseFacebookPost(
 
   nodes.forEach((node, index) => {
     const ariaInfo = ariaCommentInfo(node);
-    const author = findAuthor(node);
-    if (!author?.name) { diagnostics.push(`第 ${index + 1} 個留言找不到作者`); return; }
     const id = node.getAttribute('data-comment-id') || renderedNodeId(node);
     if (seen.has(id)) return;
     seen.add(id);
-    const timestamp = node.querySelector<HTMLElement>('time[datetime], [data-comment-time], a[aria-label*="年"], a[aria-label*="月"]');
     const parentComment = node.parentElement?.closest('[data-comment-id]');
     const isReply = node.getAttribute('data-comment-depth') !== null
       ? Number(node.getAttribute('data-comment-depth')) > 0
       : Boolean(parentComment) || ariaInfo.isReply || inferredReplies.has(node);
+    if (isReply && options.includeReplies === false) return;
+    const author = findAuthor(node);
+    if (!author?.name) { diagnostics.push(`第 ${index + 1} 個留言找不到作者`); return; }
+    const timestamp = node.querySelector<HTMLElement>('time[datetime], [data-comment-time], a[aria-label*="年"], a[aria-label*="月"]');
     const timestampValue = timestamp?.getAttribute('datetime') || timestamp?.getAttribute('data-comment-time') || timestamp?.getAttribute('aria-label') || timestamp?.textContent;
     const createdAt = parseFacebookDate(timestampValue);
     const replyToAuthorName = isReply

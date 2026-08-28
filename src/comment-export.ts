@@ -3,32 +3,29 @@ import type { FacebookComment, LoadVerificationStatus, ParsedFacebookPost } from
 export interface CommentExportMetadata {
   snapshotId: string;
   verificationStatus: LoadVerificationStatus;
-  reportedCommentTotal?: number;
   parsedTotal: number;
 }
 
 export function orderedComments(parsed: Pick<ParsedFacebookPost, 'comments' | 'replies'>): FacebookComment[] {
-  return [...parsed.comments, ...parsed.replies]
+  return [...parsed.comments]
     .sort((left, right) => (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER));
 }
 
 export function commentsToCsv(comments: FacebookComment[], metadata?: CommentExportMetadata): string {
-  const headers = ['序號', '類型', '留言者', '留言者連結', '留言內容', '時間', '回覆對象', '留言連結', 'Facebook ID', '媒體', '資料快照', '驗證狀態', 'Facebook顯示總數', '實際讀取總數'];
-  const rows = comments.map((comment, index) => [
+  const headers = ['序號', '留言者', '留言者連結', '留言內容', '時間', '留言連結', 'Facebook ID', '媒體', '資料快照', '驗證狀態', '實際讀取總數'];
+  const mainComments = comments.filter((comment) => comment.kind === 'comment');
+  const rows = mainComments.map((comment, index) => [
     String(index + 1),
-    comment.kind === 'reply' ? '回覆' : '主留言',
     comment.authorName,
     comment.authorUrl ?? '',
     comment.body,
     comment.createdAt ? formatLocalDate(comment.createdAt) : '',
-    comment.replyToAuthorName ?? '',
     comment.commentUrl ?? '',
     comment.facebookId ?? '',
     mediaLabel(comment),
     metadata?.snapshotId ?? '',
     metadata?.verificationStatus ?? '',
-    metadata?.reportedCommentTotal === undefined ? '' : String(metadata.reportedCommentTotal),
-    String(metadata?.parsedTotal ?? comments.length),
+    String(metadata?.parsedTotal ?? mainComments.length),
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }

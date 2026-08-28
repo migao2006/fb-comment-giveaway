@@ -75,7 +75,7 @@ describe('loadMoreComments', () => {
     expect(clicked).not.toHaveBeenCalled();
   });
 
-  it('safely expands an explicit visible reply control', async () => {
+  it('never expands an explicit visible reply control', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     const root = document.createElement('div');
@@ -90,10 +90,10 @@ describe('loadMoreComments', () => {
     const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
     await vi.runAllTimersAsync();
     await operation;
-    expect(clicked).toHaveBeenCalledTimes(1);
+    expect(clicked).not.toHaveBeenCalled();
   });
 
-  it('expands iPhone aria-only numbered reply controls', async () => {
+  it('never expands iPhone aria-only numbered reply controls', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
@@ -109,10 +109,85 @@ describe('loadMoreComments', () => {
     const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
     await vi.runAllTimersAsync();
     await operation;
-    expect(clicked).toHaveBeenCalledTimes(1);
+    expect(clicked).not.toHaveBeenCalled();
   });
 
-  it('does not report complete while a tried expansion control remains rendered', async () => {
+  it('never expands truncated text inside a rendered reply row', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const reply = document.createElement('article');
+    reply.setAttribute('data-comment-id', 'reply');
+    reply.setAttribute('data-comment-depth', '1');
+    const more = document.createElement('button');
+    more.textContent = '查看更多';
+    more.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    const clicked = vi.fn();
+    more.addEventListener('click', clicked);
+    reply.append(more);
+    root.append(reply);
+    document.body.append(root);
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', pendingControls: false });
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it('never expands a nested reply with its own comment id but no reply metadata', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    const main = document.createElement('article');
+    main.setAttribute('data-comment-id', 'main');
+    const reply = document.createElement('article');
+    reply.setAttribute('data-comment-id', 'reply');
+    const more = document.createElement('button');
+    more.textContent = '查看更多';
+    more.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    const clicked = vi.fn();
+    more.addEventListener('click', clicked);
+    reply.append(more);
+    main.append(reply);
+    root.append(main);
+    document.body.append(root);
+
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', pendingControls: false });
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it('never expands truncated text in an unlabeled geometrically indented iPhone reply', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <div id="main-row">
+        <span id="main-author" dir="auto">主留言者</span><span dir="auto">主留言</span>
+        <div role="button" aria-label="留言主留言者，按兩下即可回覆"></div>
+      </div>
+      <div id="reply-row">
+        <span id="reply-author" dir="auto">回覆者</span><span dir="auto">被截斷的回覆</span>
+        <div role="button" aria-label="留言回覆者，按兩下即可回覆"></div>
+        <button id="reply-more">查看更多</button>
+      </div>`;
+    document.body.append(root);
+    document.querySelector<HTMLElement>('#main-author')!.getBoundingClientRect = () => ({ left: 73, width: 60 } as DOMRect);
+    document.querySelector<HTMLElement>('#reply-author')!.getBoundingClientRect = () => ({ left: 110, width: 60 } as DOMRect);
+    const more = document.querySelector<HTMLButtonElement>('#reply-more')!;
+    more.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, bottom: 50 } as DOMRect);
+    const clicked = vi.fn();
+    more.addEventListener('click', clicked);
+
+    const operation = loadMoreComments(root, () => 1, () => undefined, new AbortController().signal);
+    await vi.runAllTimersAsync();
+
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', pendingControls: false });
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it('does not let a rendered reply control block main-comment completion', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     const root = document.createElement('div');
@@ -126,11 +201,11 @@ describe('loadMoreComments', () => {
     await vi.runAllTimersAsync();
 
     await expect(operation).resolves.toMatchObject({
-      reason: 'controls-remain',
-      pendingControls: true,
-      stablePasses: 0,
+      reason: 'complete',
+      pendingControls: false,
+      stablePasses: 2,
     });
-    expect(hasPendingExpansionControls(root)).toBe(true);
+    expect(hasPendingExpansionControls(root)).toBe(false);
   });
 
   it('ignores disabled and already-expanded controls when verifying pending work', () => {
@@ -235,21 +310,7 @@ describe('loadMoreComments', () => {
     });
   });
 
-  it('runs an extra full verification pass while Facebook reports a count gap', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
-    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 0 });
-    const operation = loadMoreComments(
-      document,
-      () => ({ commentCount: 7, expectedCount: 10, boundary: 'last', signature: 'set' }),
-      () => undefined,
-      new AbortController().signal,
-    );
-    await vi.runAllTimersAsync();
-    await expect(operation).resolves.toMatchObject({ reason: 'complete', stablePasses: 3, finalCount: 7 });
-  });
-
-  it('finishes three verification passes on a tall mobile comment page', async () => {
+  it('finishes two verification passes on a tall mobile comment page', async () => {
     vi.useFakeTimers();
     let y = 0;
     vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y);
@@ -257,19 +318,19 @@ describe('loadMoreComments', () => {
       y += typeof optionsOrX === 'object' ? Number(optionsOrX.top ?? 0) : Number(optionsOrX ?? 0);
     });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 742 });
-    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 45_256 });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 60_000 });
     const root = document.createElement('section');
     root.scrollIntoView = vi.fn(() => { y = 0; });
     document.body.append(root);
     const progress: number[] = [];
     const operation = loadMoreComments(
       root,
-      () => ({ commentCount: 151, expectedCount: 167, boundary: 'last', signature: 'set' }),
+      () => ({ commentCount: 151, boundary: 'last', signature: 'set' }),
       ({ round }) => { progress.push(round); },
       new AbortController().signal,
     );
     await vi.runAllTimersAsync();
-    await expect(operation).resolves.toMatchObject({ reason: 'complete', stablePasses: 3, finalCount: 151 });
+    await expect(operation).resolves.toMatchObject({ reason: 'complete', stablePasses: 2, finalCount: 151 });
     expect(Math.max(...progress)).toBeGreaterThan(180);
   });
 

@@ -76,7 +76,7 @@ describe('bookmarklet UI', () => {
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('1');
+    expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
     expect(shadow.querySelector('.comment-card p')!.textContent).toBe('這是截斷內容，現在已經完整展開');
     vi.useRealTimers();
   });
@@ -102,7 +102,7 @@ describe('bookmarklet UI', () => {
     expect(host.shadowRoot!.querySelectorAll('[data-action="copy-load-diagnostic"]')).toHaveLength(1);
     expect(host.shadowRoot!.querySelector('.advanced')?.textContent).toContain('問題診斷');
   });
-  it('shows separate main-comment and reply counters', async () => {
+  it('shows only main-comment statistics and ignores rendered replies', async () => {
     document.body.innerHTML = `<article><a href="/host">主辦人</a>
       <article data-comment-id="main"><a href="/a">甲</a><span dir="auto">主留言</span>
         <article data-comment-id="reply" data-comment-depth="1"><a href="/b">乙</a><span dir="auto">回覆內容</span></article>
@@ -111,8 +111,10 @@ describe('bookmarklet UI', () => {
     await import('../src/bookmarklet');
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('[data-stat="replies"]')!.textContent).toBe('1');
-    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.3');
+    expect(shadow.querySelector('[data-stat="authors"]')!.textContent).toBe('1');
+    expect(shadow.querySelector('[data-stat="duplicates"]')!.textContent).toBe('0');
+    expect(shadow.querySelector('[data-stat="replies"]')).toBeNull();
+    expect(shadow.querySelector('.badge')!.textContent).toContain('v0.3.4');
   });
 
   it('shows and searches the raw comment list independently of raffle filters', async () => {
@@ -123,8 +125,8 @@ describe('bookmarklet UI', () => {
     </article>`;
     await import('../src/bookmarklet');
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
-    expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('2');
-    expect(shadow.querySelectorAll('.comment-card')).toHaveLength(2);
+    expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
+    expect(shadow.querySelectorAll('.comment-card')).toHaveLength(1);
     expect(shadow.querySelectorAll('[data-action^="export-"]')).toHaveLength(1);
     expect(shadow.querySelector('[data-action="copy-comments"]')).toBeNull();
     expect(shadow.querySelector('[data-action="export-txt"]')).toBeNull();
@@ -132,35 +134,22 @@ describe('bookmarklet UI', () => {
     const search = shadow.querySelector<HTMLInputElement>('[name="commentSearch"]')!;
     search.value = '只是回覆';
     search.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(shadow.querySelectorAll('.comment-card')).toHaveLength(1);
+    expect(shadow.querySelectorAll('.comment-card')).toHaveLength(0);
+    expect(shadow.querySelector('[data-comment-list-summary]')!.textContent).toContain('回覆不讀取');
     expect(shadow.querySelector('[data-comment-list-summary]')!.textContent).toContain('搜尋只影響畫面');
     expect(shadow.querySelector('[data-candidates]')!.textContent).toContain('1 個抽獎資格');
   });
 
-  it('shows the difference from Facebook reported total', async () => {
+  it('does not compare main comments with Facebook aggregate totals that may include replies', async () => {
     document.body.innerHTML = `<article><a href="/host">主辦人</a><div role="button" aria-label="167 則留言，按兩下即可查看留言"></div>
       <article data-comment-id="main"><a href="/a">甲</a><span dir="auto">參加</span></article></article>`;
     await import('../src/bookmarklet');
-    const coverage = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-coverage]')!;
-    expect(coverage.textContent).toContain('Facebook 顯示 167 則');
-    expect(coverage.textContent).toContain('尚差 166 則');
-    const summary = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-comment-list-summary]')!;
-    expect(summary.textContent).toContain('Facebook 顯示 167 則，目前取得 1 則，尚差 166 則');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    expect(shadow.querySelector('[data-comment-list-summary]')!.textContent).not.toContain('167');
+    expect(shadow.querySelector('[data-action="load"]')!.textContent).toContain('全部主留言');
   });
 
-  it('reads the reported total only from the selected post root', async () => {
-    document.body.innerHTML = `<div role="button" aria-label="999 則留言，按兩下即可查看留言"></div>
-      <article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
-        <div role="button" aria-label="1 則留言，按兩下即可查看留言"></div>
-        <article data-comment-id="main"><a href="/a">甲</a><span data-comment-body>參加</span></article>
-      </article>`;
-    await import('../src/bookmarklet');
-    const coverage = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!.querySelector<HTMLElement>('[data-coverage]')!;
-    expect(coverage.textContent).toContain('Facebook 顯示 1 則');
-    expect(coverage.textContent).not.toContain('999');
-  });
-
-  it('does not claim completion when Facebook reports more comments than the snapshot', async () => {
+  it('completes main-comment loading even when Facebook aggregate total is larger', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
@@ -172,12 +161,12 @@ describe('bookmarklet UI', () => {
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('仍多 2 則');
-    expect(shadow.querySelector('[data-status]')!.textContent).not.toContain('✅ 已完成載入');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 主留言載入完成');
+    expect(shadow.querySelector('[data-coverage]')!.textContent).toContain('回覆已忽略');
     vi.useRealTimers();
   });
 
-  it('claims verified completion only when the post total matches and no controls remain', async () => {
+  it('claims main-comment completion after two stable passes', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
@@ -189,12 +178,12 @@ describe('bookmarklet UI', () => {
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 已完成載入');
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('1 則主留言、0 則回覆');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 主留言載入完成');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('1 則主留言；回覆未讀取');
     vi.useRealTimers();
   });
 
-  it('does not claim completion while an explicit reply control remains rendered', async () => {
+  it('does not click or wait for an explicit reply control', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
@@ -204,13 +193,15 @@ describe('bookmarklet UI', () => {
     </article>`;
     const replyControl = document.querySelector<HTMLButtonElement>('#reply-control')!;
     replyControl.getBoundingClientRect = () => ({ width: 100, height: 40, top: 0, bottom: 40 } as DOMRect);
+    const replyClick = vi.fn();
+    replyControl.addEventListener('click', replyClick);
     await import('../src/bookmarklet');
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('仍有留言或回覆尚未展開');
-    expect(shadow.querySelector('[data-status]')!.textContent).not.toContain('✅ 已完成載入');
+    expect(replyClick).not.toHaveBeenCalled();
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 主留言載入完成');
     vi.useRealTimers();
   });
 
@@ -226,12 +217,13 @@ describe('bookmarklet UI', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloadedFilename = this.download; });
     await import('../src/bookmarklet');
     const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
-    expect(shadow.querySelector('[data-stat="total"]')!.textContent).toBe('2');
+    expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('1');
+    expect(shadow.querySelectorAll('.comment-card')).toHaveLength(1);
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
     await Promise.resolve();
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(downloadedFilename).toBe('facebook-comments-partial.csv');
-    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toMatch(/^已送出 CSV 下載（2 則，資料快照 #\d+）。$/);
+    expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toMatch(/^已送出 CSV 下載（1 則，資料快照 #\d+）。$/);
   });
 
   it('uses the iPhone share sheet so CSV can be saved to Files', async () => {
@@ -291,7 +283,7 @@ describe('bookmarklet UI', () => {
     expect(createObjectUrl).not.toHaveBeenCalled();
   });
 
-  it('uses the normal CSV filename for a verified-complete snapshot', async () => {
+  it('uses the normal CSV filename after main-comment loading completes', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
@@ -313,7 +305,7 @@ describe('bookmarklet UI', () => {
     vi.useRealTimers();
   });
 
-  it('invalidates a completed snapshot when Facebook adds comments before export', async () => {
+  it('does not invalidate main comments when only Facebook aggregate total changes', async () => {
     vi.useFakeTimers();
     vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
     document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
@@ -328,14 +320,44 @@ describe('bookmarklet UI', () => {
     (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 已完成載入');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 主留言載入完成');
 
     document.querySelector('#reported')!.setAttribute('aria-label', '2 則留言，按兩下即可查看留言');
     (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
     await Promise.resolve();
-    expect(shadow.querySelector('[data-status]')!.textContent).toContain('Facebook 留言已更新');
-    expect(shadow.querySelector('[data-coverage]')!.textContent).toContain('尚差 1 則');
+    expect(shadow.querySelector('[data-status]')!.textContent).toContain('✅ 主留言載入完成');
+    expect(shadow.querySelector('[data-coverage]')!.textContent).toContain('回覆已忽略');
     expect(shadow.querySelector('[data-comment-copy-state]')!.textContent).toContain('已送出 CSV 下載（1 則');
+    vi.useRealTimers();
+  });
+
+  it('downgrades and includes a newly rendered main comment before exporting', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    document.body.innerHTML = `<article data-post-id="one"><header data-post-author><a href="/host">主辦人</a></header>
+      <article data-comment-id="main"><a data-comment-author href="/a">甲</a><span data-comment-body>參加</span></article>
+    </article>`;
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let downloadedFilename = '';
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloadedFilename = this.download; });
+    await import('../src/bookmarklet');
+    const shadow = document.querySelector<HTMLElement>('#fb-comment-giveaway-bookmarklet')!.shadowRoot!;
+    (shadow.querySelector('[data-action="load"]') as HTMLButtonElement).click();
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    const newComment = document.createElement('article');
+    newComment.setAttribute('data-comment-id', 'new-main');
+    newComment.innerHTML = '<a data-comment-author href="/b">乙</a><span data-comment-body>我也參加</span>';
+    document.querySelector('article[data-post-id="one"]')!.append(newComment);
+    (shadow.querySelector('[data-action="export-csv"]') as HTMLButtonElement).click();
+    await Promise.resolve();
+
+    expect(confirm).toHaveBeenCalled();
+    expect(downloadedFilename).toBe('facebook-comments-partial.csv');
+    expect(shadow.querySelector('[data-stat="comments"]')!.textContent).toBe('2');
+    expect(shadow.querySelector('[data-coverage]')!.textContent).toContain('尚未完成載入');
     vi.useRealTimers();
   });
 

@@ -14,6 +14,15 @@ describe('parseFacebookPost', () => {
     expect(result.comments[0]!.authorUrl).toBe('https://facebook.com/alice');
     expect(result.comments[1]!.createdAt).toContain('2026-08-21');
   });
+  it('skips reply records entirely in main-comment mode', () => {
+    const result = parseFacebookPost(
+      new JSDOM(fixture, { url: 'https://www.facebook.com/post/1' }).window.document,
+      'https://www.facebook.com/post/1',
+      { includeReplies: false },
+    );
+    expect(result.comments.map((item) => item.id)).toEqual(['c1', 'c2', 'c4']);
+    expect(result.replies).toEqual([]);
+  });
   it('infers a post author from the outer post article when no marker exists', () => {
     const document = new JSDOM('<article data-post-id="post"><header><a href="https://www.facebook.com/profile.php?id=8&ref=feed#x">粉專</a></header><article data-comment-id="c"><a href="/a">留言者</a><span dir="auto">參加</span></article></article>').window.document;
     expect(parseFacebookPost(document).postAuthor).toEqual({ name: '粉專', url: 'https://facebook.com/profile.php?id=8' });

@@ -10,7 +10,6 @@ export type LoadingEndReason = 'complete' | 'controls-remain' | 'limit-reached' 
 /** A caller may provide stable boundary/signature values in addition to the count. */
 export interface LoadingSnapshot {
   commentCount: number;
-  expectedCount?: number;
   boundary?: string;
   signature?: string;
 }
@@ -33,14 +32,6 @@ const MORE_COMMENT_PATTERNS = [
   /^更多留言$/,
   /^查看先前的留言$/,
   /^查看(?:另|另外)?\s*\d+\s*則留言$/,
-];
-
-const MORE_REPLY_PATTERNS = [
-  /^查看更多\s*(?:[（(]?\s*\d+\s*[）)]?\s*)?則?回覆$/,
-  /^顯示更多回覆$/,
-  /^展開更多回覆$/,
-  /^查看先前的回覆$/,
-  /^查看(?:另|另外)?\s*\d+\s*則回覆$/,
 ];
 
 const textOf = (element: Element) => (element.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -73,7 +64,7 @@ function findExpansionButtons(root: ParentNode, visibleOnly = true): HTMLElement
       || element.getAttribute('aria-expanded') === 'true';
     return (visibleOnly ? isVisible(element) : isRendered(element))
       && !unavailable
-      && texts.some((text) => [...MORE_COMMENT_PATTERNS, ...MORE_REPLY_PATTERNS].some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
+      && texts.some((text) => MORE_COMMENT_PATTERNS.some((pattern) => pattern.test(text)) || isTruncatedCommentButton(element, text))
       && texts.every((text) => !/(?:按讚|心情|反應)/.test(text));
   });
 }
@@ -87,10 +78,40 @@ function isTruncatedCommentButton(element: HTMLElement, text: string): boolean {
   let parent = element.parentElement;
   for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
     const label = (parent.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim();
-    if (parent.matches('[data-comment-id]') || /(?:的留言|的回覆|comment by .+|reply by .+)$/iu.test(label)) return true;
+    const commentDepth = parent.getAttribute('data-comment-depth');
+    if ((commentDepth !== null && Number(commentDepth) > 0) || /(?:的回覆|reply by .+)/iu.test(label)) return false;
+    if (parent.matches('[data-comment-id]')) {
+      if (parent.parentElement?.closest('[data-comment-id]') || isIndentedMobileReplyRow(parent)) return false;
+      return true;
+    }
+    if (/(?:的留言|comment by .+)$/iu.test(label)) return true;
     const hasCommentAction = [...parent.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]')]
       .some((button) => /^留言.+按.+按/u.test(button.getAttribute('aria-label') ?? ''));
-    if (hasCommentAction && parent.querySelectorAll('button, [role="button"]').length <= 12) return true;
+    if (hasCommentAction && parent.querySelectorAll('button, [role="button"]').length <= 12) {
+      if (isIndentedMobileReplyRow(parent)) return false;
+      return true;
+    }
+  }
+  return false;
+}
+
+function mobileRowTextLeft(row: Element): number | undefined {
+  const text = [...row.querySelectorAll<HTMLElement>('[dir="auto"]')]
+    .find((item) => !item.querySelector('[dir="auto"]') && !/^留言.+按.+按/u.test(item.getAttribute('aria-label') ?? ''));
+  const rect = text?.getBoundingClientRect();
+  return rect && rect.width > 0 ? rect.left : undefined;
+}
+
+function isIndentedMobileReplyRow(row: Element): boolean {
+  const currentLeft = mobileRowTextLeft(row);
+  if (currentLeft === undefined) return false;
+  let scope = row.parentElement;
+  for (let depth = 0; scope && depth < 5; depth += 1, scope = scope.parentElement) {
+    const lefts = [...scope.querySelectorAll<HTMLElement>('button[aria-label], [role="button"][aria-label]')]
+      .filter((signal) => /^留言.+按.+按/u.test(signal.getAttribute('aria-label') ?? ''))
+      .map((signal) => mobileRowTextLeft(signal.parentElement ?? signal))
+      .filter((left): left is number => left !== undefined);
+    if (lefts.length >= 2) return currentLeft >= Math.min(...lefts) + 12;
   }
   return false;
 }
@@ -158,13 +179,12 @@ function normalizeSnapshot(value: number | LoadingSnapshot): LoadingSnapshot {
 
 function sameSnapshot(left: LoadingSnapshot, right: LoadingSnapshot): boolean {
   return left.commentCount === right.commentCount
-    && (left.expectedCount === undefined || right.expectedCount === undefined || left.expectedCount === right.expectedCount)
     && (left.boundary === undefined || right.boundary === undefined || left.boundary === right.boundary)
     && (left.signature === undefined || right.signature === undefined || left.signature === right.signature);
 }
 
 function snapshotKey(snapshot: LoadingSnapshot): string {
-  return `${snapshot.commentCount}\u0000${snapshot.expectedCount ?? ''}\u0000${snapshot.boundary ?? ''}\u0000${snapshot.signature ?? ''}`;
+  return `${snapshot.commentCount}\u0000${snapshot.boundary ?? ''}\u0000${snapshot.signature ?? ''}`;
 }
 
 /**
@@ -179,7 +199,7 @@ export async function loadMoreComments(
 ): Promise<LoadingResult> {
   const clickedAtSnapshot = new WeakMap<HTMLElement, string>();
   const scrollTarget = findScrollTarget(root);
-  let maxRounds = estimatedRoundLimit(scrollTarget, 3);
+  let maxRounds = estimatedRoundLimit(scrollTarget, 2);
   let rounds = 0;
   let stablePasses = 0;
   let previous: LoadingSnapshot;
@@ -201,7 +221,7 @@ export async function loadMoreComments(
   previous = normalizeSnapshot(getSnapshot());
 
   for (rounds = 1; rounds <= maxRounds && !signal.aborted; rounds += 1) {
-    maxRounds = Math.max(maxRounds, estimatedRoundLimit(scrollTarget, 3));
+    maxRounds = Math.max(maxRounds, estimatedRoundLimit(scrollTarget, 2));
     if (root instanceof Element && !root.isConnected) return result('root-lost', false);
     const key = snapshotKey(previous);
     const buttons = findExpansionButtons(root)
@@ -216,7 +236,7 @@ export async function loadMoreComments(
       round: rounds,
       clicked: buttons.length,
       commentCount: previous.commentCount,
-      message: buttons.length ? '正在等待 Facebook 展開留言或回覆…' : '安全捲動中，正在尋找更多留言…',
+      message: buttons.length ? '正在等待 Facebook 展開主留言…' : '安全捲動中，正在尋找更多主留言…',
     });
     await pause(buttons.length ? 1100 : 750, signal);
     if (signal.aborted) break;
@@ -224,7 +244,7 @@ export async function loadMoreComments(
     const current = normalizeSnapshot(getSnapshot());
     const settledAtBottom = targetAtBottom(scrollTarget) && sameSnapshot(previous, current);
     previous = current;
-    onProgress({ round: rounds, clicked: buttons.length, commentCount: current.commentCount, message: `已辨識 ${current.commentCount} 則留言（含回覆）` });
+    onProgress({ round: rounds, clicked: buttons.length, commentCount: current.commentCount, message: `已辨識 ${current.commentCount} 則主留言` });
     if (settledAtBottom) {
       const pending = findExpansionButtons(root, false);
       const freshControl = pending.find((button) => clickedAtSnapshot.get(button) !== snapshotKey(current));
@@ -237,16 +257,13 @@ export async function loadMoreComments(
       else {
         stablePasses = completedPassSnapshot && sameSnapshot(completedPassSnapshot, current) ? stablePasses + 1 : 1;
         completedPassSnapshot = current;
-        const requiredPasses = current.expectedCount !== undefined && current.commentCount < current.expectedCount ? 3 : 2;
-        if (stablePasses >= requiredPasses) return result('complete', false);
+        if (stablePasses >= 2) return result('complete', false);
         positionAtStart(root, scrollTarget);
         onProgress({
           round: rounds,
           clicked: 0,
           commentCount: current.commentCount,
-          message: stablePasses === 1
-            ? '第一輪已到底，正在從留言起點進行完整核對…'
-            : 'Facebook 顯示仍有差額，正在進行額外完整核對…',
+          message: '第一輪已到底，正在從留言起點進行完整核對…',
         });
         await pause(350, signal);
         previous = normalizeSnapshot(getSnapshot());

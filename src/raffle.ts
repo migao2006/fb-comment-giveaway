@@ -1,4 +1,5 @@
 import type { FacebookComment, Participant, RaffleFilters, RaffleProof, RaffleResult } from './types';
+import { TOOL_VERSION } from './version';
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase();
 type PostAuthor = { name: string; url?: string };
@@ -96,7 +97,7 @@ export async function createRaffleProof(
   const tokens = new Map(result.participants.map((person) => [person.key, opaqueToken()]));
   const candidateTokens = result.participants.map((person) => tokens.get(person.key)!);
   const record = {
-    version: 1 as const, toolVersion: '0.1.0', algorithm: 'crypto-rejection-sampling-v1' as const, createdAt, rules,
+    version: 1 as const, toolVersion: TOOL_VERSION, algorithm: 'crypto-rejection-sampling-v1' as const, createdAt, rules,
     sourcePageHash: await digest(sourcePage), winnerCount: result.winners.length, alternateCount: result.alternates.length,
     candidateCount: candidateTokens.length,
     candidateTokens, candidateListHash: await digest(candidateTokens.join('\n')),
@@ -110,7 +111,7 @@ export async function createRaffleProof(
 export async function verifyRaffleProof(proof: RaffleProof, sourcePage?: string): Promise<boolean> {
   const { integrityHash, ...record } = proof;
   if (await digest(stableSerialize(record)) !== integrityHash) return false;
-  if (proof.version !== 1 || proof.toolVersion !== '0.1.0' || proof.algorithm !== 'crypto-rejection-sampling-v1') return false;
+  if (proof.version !== 1 || !/^\d+\.\d+\.\d+$/.test(proof.toolVersion) || proof.algorithm !== 'crypto-rejection-sampling-v1') return false;
   if (!/^[a-f0-9]{64}$/.test(proof.sourcePageHash)) return false;
   if (sourcePage && await digest(sourcePage) !== proof.sourcePageHash) return false;
   if (!Number.isInteger(proof.winnerCount) || !Number.isInteger(proof.alternateCount)

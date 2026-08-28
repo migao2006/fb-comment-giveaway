@@ -1,6 +1,6 @@
 export type CommentKind = 'comment' | 'reply';
 
-export type LoadVerificationStatus = 'verified-complete' | 'visible-complete' | 'partial';
+export type LoadVerificationStatus = 'visible-complete' | 'partial';
 
 export interface FacebookComment {
   id: string;

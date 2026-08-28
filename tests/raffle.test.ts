@@ -9,6 +9,23 @@ const comments: FacebookComment[] = [
   { id: '3', authorName: 'Host', authorUrl: 'https://facebook.com/h', body: '抽獎', createdAt: '2026-08-21T00:00:00.000Z', kind: 'comment' },
   { id: '4', authorName: 'Bob', body: '不相關', createdAt: '2026-08-22T00:00:00.000Z', kind: 'comment' },
 ];
+
+const stableSerialize = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+async function refreshIntegrityHash(proof: Awaited<ReturnType<typeof createRaffleProof>>): Promise<void> {
+  const { integrityHash: _oldHash, ...record } = proof;
+  const bytes = new TextEncoder().encode(stableSerialize(record));
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  proof.integrityHash = [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 describe('raffle core', () => {
   it('filters then deduplicates participants by profile URL', () => {
     const eligible = filterComments(comments, { name: 'Host', url: 'https://facebook.com/h' }, { keyword: '抽獎', excludePostAuthor: true, startDate: '2026-08-20', endDate: '2026-08-21' });
@@ -46,6 +63,18 @@ describe('raffle core', () => {
       mutate(copy);
       expect(await verifyRaffleProof(copy, 'https://facebook.com/posts/1')).toBe(false);
     }
+  });
+
+  it('verifies older tool versions when the proof format is still supported', async () => {
+    const people = participantsFrom(comments);
+    const proof = await createRaffleProof(
+      { participants: people, winners: people.slice(0, 1), alternates: [], randomValues: [0] },
+      {},
+      'https://facebook.com/posts/legacy',
+    );
+    proof.toolVersion = '0.1.0';
+    await refreshIntegrityHash(proof);
+    expect(await verifyRaffleProof(proof)).toBe(true);
   });
 
   it('keeps unrelated people with the same display name separate when profile URLs are absent', () => {

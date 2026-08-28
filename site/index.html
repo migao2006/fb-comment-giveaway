@@ -4,108 +4,50 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#f3f0e8">
-    <meta name="description" content="不用安裝 App，在 Facebook 貼文頁點一下書籤，就能在手機本機整理留言並抽獎。">
-    <meta property="og:title" content="FB 留言抽獎書籤">
-    <meta property="og:description" content="留言留在你的手機上。開啟貼文、點一下書籤、開始抽獎。">
+    <meta name="description" content="在 Facebook 貼文頁載入主留言、下載 CSV 並抽獎。">
+    <meta property="og:title" content="FB 留言抽獎">
+    <meta property="og:description" content="iPhone Safari 書籤工具，只讀取主留言。">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://migao2006.github.io/fb-comment-giveaway/">
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="FB 留言抽獎書籤">
-    <meta name="twitter:description" content="不用安裝 App，直接從 Facebook 頁面擷取已載入的留言。">
-    <title>FB 留言抽獎書籤</title>
+    <meta name="twitter:title" content="FB 留言抽獎">
+    <meta name="twitter:description" content="載入主留言、下載 CSV、抽獎。">
+    <title>FB 留言抽獎</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="回到首頁">
-        <span class="brand-mark" aria-hidden="true">抽</span>
-        <span>FB 留言抽獎</span>
-      </a>
-      <a class="source-link" href="https://github.com/migao2006/fb-comment-giveaway">GitHub 原始碼</a>
+      <a class="brand" href="#top">FB 留言抽獎</a>
+      <a href="https://github.com/migao2006/fb-comment-giveaway">GitHub</a>
     </header>
 
     <main id="top">
-      <section class="hero">
-        <div class="eyebrow"><span></span>資料只留在你的裝置</div>
-        <h1>打開貼文，<br><em>點一下書籤。</em></h1>
-        <p class="lead">不用輸入 Facebook 密碼，不用上傳 Cookie。工具只讀取你目前看得到、已經載入頁面的留言。</p>
-        <div class="install-card">
-          <div>
-            <span class="step-label">安裝用書籤程式</span>
-            <strong>FB 留言抽獎</strong>
-          </div>
-          <button id="copy-bookmarklet" class="primary-button" type="button">
-            <span class="button-label">複製書籤程式</span>
-            <span class="button-state" aria-live="polite"></span>
-          </button>
-          <p id="copy-help" class="copy-help">複製後，依照下方步驟把程式貼到 Safari 書籤的網址欄。</p>
-          <noscript>請啟用 JavaScript，才能複製書籤程式。</noscript>
-        </div>
-        <p class="support-note">適用於 iPhone Safari 與支援 JavaScript 書籤的行動瀏覽器。</p>
+      <section class="intro">
+        <p class="tag">iPhone Safari 書籤工具</p>
+        <h1>FB 留言抽獎</h1>
+        <p>載入主留言、下載 CSV、抽獎。</p>
+        <button id="copy-bookmarklet" class="primary-button" type="button">
+          <span>複製書籤程式</span>
+          <span class="button-state" aria-live="polite"></span>
+        </button>
+        <noscript>請啟用 JavaScript。</noscript>
       </section>
 
-      <section class="section how-to" aria-labelledby="install-title">
-        <div class="section-heading">
-          <span>第一次設定</span>
-          <h2 id="install-title">iPhone Safari 安裝方式</h2>
-        </div>
-        <ol class="steps">
-          <li>
-            <span class="step-number">01</span>
-            <div><h3>先加入任意書籤</h3><p>在 Safari 開啟這一頁，點分享，選「加入書籤」，名稱改成「FB 留言抽獎」。</p></div>
-          </li>
-          <li>
-            <span class="step-number">02</span>
-            <div><h3>編輯書籤網址</h3><p>按上方「複製書籤程式」，再到書籤列表長按剛才的書籤，選「編輯」，清空網址並貼上。</p></div>
-          </li>
-          <li>
-            <span class="step-number">03</span>
-            <div><h3>在 Facebook 貼文執行</h3><p>用 Safari 登入 Facebook、開啟一般貼文並將排序切成「所有留言」，再點這個書籤。</p></div>
-          </li>
+      <section class="guide" aria-labelledby="install-title">
+        <h2 id="install-title">安裝</h2>
+        <ol>
+          <li><b>1</b><span>在 Safari 將本頁加入書籤。</span></li>
+          <li><b>2</b><span>複製上方程式，貼到該書籤的網址欄。</span></li>
+          <li><b>3</b><span>開啟 Facebook 貼文，把排序改成「所有留言」，再執行書籤。</span></li>
         </ol>
       </section>
 
-      <section class="section workflow" aria-labelledby="workflow-title">
-        <div class="section-heading inverse">
-          <span>實際使用</span>
-          <h2 id="workflow-title">四個步驟完成抽獎</h2>
-        </div>
-        <div class="workflow-grid">
-          <article><b>1</b><h3>掃描</h3><p>先讀取目前頁面已顯示的主留言。</p></article>
-          <article><b>2</b><h3>繼續載入</h3><p>半自動展開更多留言，可隨時停止。</p></article>
-          <article><b>3</b><h3>設定規則</h3><p>去重、關鍵字、日期、排除作者與名額。</p></article>
-          <article><b>4</b><h3>抽獎</h3><p>用瀏覽器加密亂數抽出正取與備取。</p></article>
-        </div>
-      </section>
-
-      <section class="section privacy" aria-labelledby="privacy-title">
-        <div class="privacy-copy">
-          <span class="kicker">Privacy by design</span>
-          <h2 id="privacy-title">我們不需要你的 Facebook 帳號資料。</h2>
-          <p>程式在目前頁面執行，不連接我們的伺服器、不讀取 Cookie、不要求 Access Token。只有你主動下載匯出檔案時，資料才會離開頁面並存到你的裝置。</p>
-        </div>
-        <ul class="privacy-list">
-          <li><span>不收集</span>密碼、Cookie、Token</li>
-          <li><span>不傳送</span>留言或參加者名單</li>
-          <li><span>可查閱</span>完整公開原始碼</li>
-        </ul>
-      </section>
-
-      <section class="section limits" aria-labelledby="limits-title">
-        <div class="section-heading">
-          <span>使用前請注意</span>
-          <h2 id="limits-title">工具能讀到什麼？</h2>
-        </div>
-        <div class="limit-grid">
-          <p><strong>可以：</strong>你已登入且有權限查看的一般貼文，以及頁面已載入或工具成功展開的主留言。</p>
-          <p><strong>不保證：</strong>Reels、直播、相片檢視器、未載入的留言，以及 Facebook 日後改版後的新頁面結構。</p>
-        </div>
-      </section>
+      <p class="note">只處理目前頁面可見的主留言；資料不會上傳。</p>
     </main>
 
     <footer>
-      <p>非 Meta 或 Facebook 官方產品。使用時請遵守平台規範與所在地個資法規。</p>
-      <a href="./bookmarklet.txt" download>下載純文字版本</a>
+      <span>非 Facebook 官方工具</span>
+      <a href="./bookmarklet.txt" download>下載文字版</a>
     </footer>
 
     <script src="./assets/install.js"></script>

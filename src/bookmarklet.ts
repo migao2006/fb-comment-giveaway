@@ -3,9 +3,9 @@ import { commentsToCsv, formatLocalDate, mediaLabel, orderedComments } from './c
 import { findFacebookPostRoot, parseFacebookPost } from './parser';
 import { createRaffleProof, drawRaffle, filterComments, participantsFrom } from './raffle';
 import type { FacebookComment, LoadVerificationStatus, ParsedFacebookPost, RaffleFilters, RaffleProof, RaffleResult } from './types';
+import { TOOL_VERSION } from './version';
 
 const ROOT_ID = 'fb-comment-giveaway-bookmarklet';
-const TOOL_VERSION = '0.3.4';
 const facebookHost = /(^|\.)facebook\.com$/i.test(location.hostname);
 
 if (!facebookHost) {
@@ -26,12 +26,11 @@ function mount(): void {
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `${panelStyles()}<aside class="panel" role="dialog" aria-label="FB 留言抽獎助手">
     <header class="header">
-      <div><span class="badge">本機執行 · v${TOOL_VERSION}</span><h1>FB 留言抽獎</h1></div>
+      <div><span class="badge">v${TOOL_VERSION}</span><h1>FB 留言抽獎</h1></div>
       <div class="header-actions"><button class="icon" data-action="collapse" aria-label="收合面板">−</button><button class="icon" data-action="close" aria-label="關閉面板">×</button></div>
     </header>
     <div class="body">
-      <section class="notice"><b>先把留言排序切成「所有留言」</b><span>主留言模式：只載入主留言，不展開、不保存回覆。</span></section>
-      <h2 class="section-title">留言資料</h2>
+      <section class="notice">留言排序請選「所有留言」 · 僅讀取主留言</section>
       <section class="stats" aria-live="polite">
         <div><strong data-stat="comments">0</strong><span>主留言</span></div>
         <div><strong data-stat="authors">0</strong><span>主留言者</span></div>
@@ -48,7 +47,7 @@ function mount(): void {
         <strong>找不到 Facebook 留言</strong><p data-error-message></p><code>錯誤代碼：POST_NOT_FOUND</code>
         <div><button class="button error-button" data-action="copy-diagnostic">複製診斷資訊</button><span data-copy-state></span></div>
       </section>
-      <details class="comments-section" open>
+      <details open>
         <summary>完整主留言 <span data-comment-count>0 則</span></summary>
         <label class="comment-search">搜尋完整主留言<input name="commentSearch" type="search" placeholder="搜尋留言者或留言內容"></label>
         <p class="comment-list-summary" data-comment-list-summary>尚無留言資料</p>
@@ -69,7 +68,7 @@ function mount(): void {
           <label class="check full"><input name="excludePostAuthor" type="checkbox" checked><span>排除貼文作者</span></label>
           <label class="check full"><input name="oneEntryPerPerson" type="checkbox" checked><span>每個帳號只有一次抽獎機會</span></label>
         </div>
-        <p class="candidate-summary" data-candidates>符合條件：0 位</p>
+        <p class="candidate-summary" data-candidates>符合：0 位</p>
       </details>
       <button class="draw" data-action="draw" disabled>開始抽獎</button>
       <section class="results hidden" data-results>
@@ -82,7 +81,6 @@ function mount(): void {
         </div>
       </section>
       <details class="advanced"><summary>進階功能／問題診斷</summary><div class="bottom-diagnostic"><button class="button secondary" data-action="copy-load-diagnostic">複製載入診斷</button><span data-load-copy-state></span></div></details>
-      <p class="footer-note">不讀取 Cookie、密碼或 Access Token。關閉或重新整理頁面後，本次資料即消失。</p>
     </div>
   </aside>`;
   document.documentElement.append(host);
@@ -192,10 +190,14 @@ function mount(): void {
     coverage.classList.toggle('partial', dataSnapshot.verificationStatus !== 'visible-complete');
     coverage.textContent = !hasLoadingAttempt ? ''
       : dataSnapshot.verificationStatus === 'visible-complete'
-        ? `✅ 主留言載入完成 · 已讀取 ${parsedTotal} 則主留言 · 回覆已忽略`
-        : `⚠️ 主留言尚未完成載入 · 目前取得 ${parsedTotal} 則 · 回覆已忽略`;
+        ? `✅ ${parsedTotal} 則主留言`
+        : `⚠️ 已載入 ${parsedTotal} 則，尚未完成`;
     const missingDates = (filters.startDate || filters.endDate) ? snapshotParsed.comments.filter((comment) => !comment.createdAt).length : 0;
-    query<HTMLElement>('[data-candidates]').textContent = `符合條件：${eligible.length} 個抽獎資格 · ${allAuthors.length} 位主留言者${duplicatePeople ? ` · ${duplicatePeople} 位重複留言` : ''}${snapshotParsed.postAuthor ? ` · 貼文作者：${snapshotParsed.postAuthor.name}` : ''}${missingDates ? ` · ${missingDates} 則無時間已排除` : ''}${missingProfiles ? ` · ${missingProfiles} 則缺個人頁連結，無法帳號去重` : ''}`;
+    const candidateNotes = [
+      missingDates ? `${missingDates} 則缺時間` : '',
+      missingProfiles ? `${missingProfiles} 則無法帳號去重` : '',
+    ].filter(Boolean);
+    query<HTMLElement>('[data-candidates]').textContent = `符合：${eligible.length} 位${candidateNotes.length ? ` · ${candidateNotes.join(' · ')}` : ''}`;
     drawButton.disabled = eligible.length === 0;
     if (refreshComments) renderFullComments();
     if (message) status.textContent = message;
@@ -208,20 +210,18 @@ function mount(): void {
       .some((value) => value.toLocaleLowerCase().includes(term))) : all;
     query<HTMLElement>('[data-comment-count]').textContent = `${all.length} 則`;
     query<HTMLElement>('[data-comment-list-summary]').textContent = all.length
-      ? `顯示 ${visible.length}／${all.length} 則主留言；回覆不讀取。搜尋只影響畫面，不影響 CSV 或抽獎。`
+      ? `顯示 ${visible.length}／${all.length} 則`
       : '尚無主留言資料';
     const list = query<HTMLElement>('[data-comment-list]');
     list.replaceChildren();
     visible.forEach((comment, index) => {
       const card = document.createElement('article');
-      card.className = 'comment-card comment';
+      card.className = 'comment-card';
       const heading = document.createElement('div');
       heading.className = 'comment-heading';
-      const kind = document.createElement('b');
-      kind.textContent = '主留言';
       const sequence = document.createElement('span');
       sequence.textContent = `#${comment.sequence ?? index + 1}`;
-      heading.append(kind, sequence);
+      heading.append(sequence);
       const author = document.createElement('strong');
       author.textContent = comment.authorName;
       const body = document.createElement('p');
@@ -377,7 +377,7 @@ function mount(): void {
       commitDataSnapshot(latestPostRoot);
       refreshSummary();
       status.textContent = visibleComplete
-        ? `✅ 主留言載入完成，共取得 ${parsedTotal} 則主留言；回覆未讀取`
+        ? `✅ 載入完成：${parsedTotal} 則主留言`
         : endReason === 'root-lost' ? '⚠️ 留言區已更新，已改讀目前貼文，請再次載入全部主留言'
           : endReason === 'aborted' ? '已停止載入'
             : endReason === 'limit-reached' ? '⚠️ 已達載入輪數上限，請再次載入'
@@ -416,9 +416,9 @@ function mount(): void {
 
   async function draw(): Promise<void> {
     if (!ensureCurrentPage()) return;
-    const snapshotParsed = dataSnapshot.parsed;
     revalidateCompletedSnapshot();
     if (!confirmPartialUse('抽獎')) return;
+    const snapshotParsed = dataSnapshot.parsed;
     const winnerCount = clampNumber(query<HTMLInputElement>('[name="winnerCount"]').value, 1, 100);
     const alternateCount = clampNumber(query<HTMLInputElement>('[name="alternateCount"]').value, 0, 100);
     const filters = currentFilters();
@@ -478,8 +478,7 @@ function mount(): void {
       code: !snapshotParsed.comments.length
         ? 'POST_NOT_FOUND'
         : dataSnapshot.verificationStatus === 'visible-complete' && !dataSnapshot.pendingExpansionControls ? 'LOAD_COMPLETE'
-          : dataSnapshot.loadOutcome === '無法驗證完整' ? 'LOAD_UNVERIFIED'
-            : dataSnapshot.loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
+          : dataSnapshot.loadOutcome === '使用者停止' ? 'LOAD_STOPPED'
               : dataSnapshot.loadOutcome === '達到輪數上限' ? 'LOAD_LIMIT_REACHED'
                 : dataSnapshot.loadOutcome === '留言區已更新' ? 'LOAD_ROOT_LOST'
                   : dataSnapshot.loadOutcome === '執行中' ? 'LOAD_RUNNING'
@@ -489,10 +488,8 @@ function mount(): void {
       snapshotId: dataSnapshot.id,
       snapshotCapturedAt: dataSnapshot.capturedAt,
       parsedComments: snapshotParsed.comments.length,
-      parsedReplies: snapshotParsed.replies.length,
       parsedTotal,
       loadingMode: 'main-comments-only',
-      reportedTotalIncludesReplies: true,
       loadingAttempted: hasLoadingAttempt,
       pendingExpansionControls: dataSnapshot.pendingExpansionControls,
       verificationStatus: dataSnapshot.verificationStatus,
@@ -553,9 +550,9 @@ function mount(): void {
     try {
       const saved = await saveCsv(filename, commentsToCsv(comments, exportMetadata()));
       if (saved.method === 'share') {
-        state.textContent = `已完成 CSV 儲存／分享（${comments.length} 則，資料快照 #${dataSnapshot.id}）。`;
+        state.textContent = `CSV 已儲存／分享（${comments.length} 則）。`;
       } else if (saved.method === 'download') {
-        state.textContent = `已送出 CSV 下載（${comments.length} 則，資料快照 #${dataSnapshot.id}）。`;
+        state.textContent = `CSV 已下載（${comments.length} 則）。`;
       } else {
         state.replaceChildren(document.createTextNode(`CSV 已準備完成（${comments.length} 則）。`));
         const link = document.createElement('a');
@@ -778,26 +775,10 @@ function downloadBlob(filename: string, blob: Blob): void {
   }, 60_000);
 }
 
-async function copyText(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return; }
-  const field = document.createElement('textarea');
-  field.value = value;
-  field.setAttribute('readonly', '');
-  field.style.position = 'fixed';
-  field.style.opacity = '0';
-  document.body.append(field);
-  field.select();
-  const copied = document.execCommand('copy');
-  field.remove();
-  if (!copied) throw new Error('Copy failed');
-}
-
 function panelStyles(): string { return `<style>
 :host{all:initial;position:fixed;z-index:2147483647;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#19201e}
-:host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{display:flex;flex-direction:column;gap:4px;background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.notice span{color:#69716d}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.coverage{margin:-4px 0 12px;padding:8px 10px;border-radius:9px;background:#e7f2ed;color:#174f3f;font:700 11px/1.4 sans-serif}.coverage.partial{background:#fff0d8;color:#7a4b00}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}.footer-note{margin:13px 4px 0;color:#777e7a;font-size:10px;line-height:1.45}
-.stats{grid-template-columns:repeat(3,1fr)}
-.diagnostic-row{display:flex;align-items:center;gap:8px;margin:-5px 2px 10px}.diagnostic-link{border:0;background:transparent;color:#174f3f;padding:3px 0;text-decoration:underline;font:700 11px sans-serif}.diagnostic-row span{font-size:10px;color:#59625e}.bottom-diagnostic{display:flex;align-items:center;gap:8px;margin-top:12px}.bottom-diagnostic button{min-height:44px}.bottom-diagnostic span{font-size:10px;color:#59625e}.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}.form-grid input{box-sizing:border-box;min-width:0}
-details{margin-top:10px}summary span{float:right;color:#69716d;font-size:11px}.comment-search{display:flex;flex-direction:column;gap:5px;margin-top:12px;color:#616b66;font-size:11px}.comment-search input{box-sizing:border-box;width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.comment-list-summary{margin:9px 0;color:#69716d;font-size:10px}.comment-list{display:flex;flex-direction:column;gap:7px;max-height:310px;overflow:auto;overscroll-behavior:contain}.comment-card{padding:9px;border:1px solid #e3e5e1;border-radius:10px;background:#fbfbf8}.comment-card.reply{margin-left:18px;border-left:3px solid #8aafa2}.comment-heading{display:flex;justify-content:space-between;color:#174f3f;font-size:10px}.comment-card strong{display:block;margin-top:4px;font-size:12px}.comment-card p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.45}.comment-card small{display:block;color:#69716d;font-size:10px}.comment-card a{display:inline-block;margin-top:5px;color:#174f3f;font-size:10px}.raw-export-row{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.raw-export-row .primary{grid-column:1/-1}.copy-state{margin:7px 0 0;color:#174f3f;font-size:10px}.advanced{padding:10px;background:#f2f1eb}
-.section-title{margin:13px 2px -4px;font-size:13px;color:#174f3f}
+:host([data-hidden]){display:none}:host([data-collapsed]) .body{display:none}:host([data-collapsed]) .panel{width:auto}.panel{width:min(410px,calc(100vw - 20px));max-height:min(760px,calc(100dvh - 20px));display:flex;flex-direction:column;background:#f7f6f0;border:1px solid rgba(0,0,0,.14);border-radius:20px;box-shadow:0 20px 80px rgba(0,0,0,.3);overflow:hidden}.header{display:flex;justify-content:space-between;align-items:flex-start;padding:17px 18px;background:#174f3f;color:white}.header h1{font:750 20px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:5px 0 0}.badge{font:700 10px/1 sans-serif;letter-spacing:.1em;color:#d7f36b}.header-actions{display:flex;gap:7px}.icon{width:34px;height:34px;border:1px solid rgba(255,255,255,.25);border-radius:10px;background:transparent;color:white;font-size:21px;line-height:1;cursor:pointer}.body{overflow:auto;overscroll-behavior:contain;padding:14px 14px 18px}.notice{background:#ece8d8;border-radius:12px;padding:11px 12px;font:13px/1.4 sans-serif}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}.stats div{background:white;border:1px solid rgba(0,0,0,.09);border-radius:12px;padding:10px;text-align:center}.stats strong{display:block;font-size:22px;color:#174f3f}.stats span{font-size:11px;color:#69716d}.coverage{margin:-4px 0 12px;padding:8px 10px;border-radius:9px;background:#e7f2ed;color:#174f3f;font:700 11px/1.4 sans-serif}.coverage.partial{background:#fff0d8;color:#7a4b00}.load-row{display:flex;gap:7px}.button{min-height:42px;border-radius:11px;padding:0 12px;border:0;font-weight:700;font-size:13px;cursor:pointer}.primary{background:#174f3f;color:white;flex:1}.secondary{background:white;color:#174f3f;border:1px solid rgba(23,79,63,.25)}.danger{background:#9d3028;color:white;flex:1}.ghost{background:transparent;color:#43504a;text-decoration:underline}.hidden{display:none!important}.status{margin:10px 2px 13px;color:#59625e;font-size:12px;line-height:1.4}details{background:white;border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:12px}summary{font-weight:750;font-size:14px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#616b66}.form-grid .full{grid-column:1/-1}.form-grid input[type=text],.form-grid input[type=date],.form-grid input[type=number]{width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.check{flex-direction:row!important;align-items:center;font-size:13px!important;color:#303835!important}.check input{width:18px;height:18px;accent-color:#174f3f}.candidate-summary{margin:12px 0 0;padding-top:10px;border-top:1px solid #e5e5df;font-size:12px;color:#174f3f;font-weight:700}.draw{width:100%;min-height:52px;margin-top:12px;border:0;border-radius:13px;background:#d7f36b;color:#174f3f;font-size:17px;font-weight:800;cursor:pointer}.draw:disabled{background:#dfe1da;color:#90958f;cursor:not-allowed}.results{margin-top:14px;padding:14px;background:#174f3f;color:white;border-radius:14px}.results h2{margin:0 0 12px;font-size:18px}.results h3{margin:12px 0 6px;font-size:12px;color:#d7f36b;letter-spacing:.08em}.results ol{margin:0;padding-left:25px}.results li{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.14)}.results a,.results li>span{display:block;color:white;font-weight:750;font-size:15px}.results small{color:rgba(255,255,255,.65);font-size:11px}.export-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.export-row .secondary{border:0}.results .ghost{color:white}
+.bottom-diagnostic{display:flex;align-items:center;gap:8px;margin-top:12px}.bottom-diagnostic button{min-height:44px}.bottom-diagnostic span{font-size:10px;color:#59625e}.error-card{margin:0 0 13px;padding:13px;background:#fff0ee;border:1px solid #e4a19b;border-left:4px solid #b9382e;border-radius:12px;color:#67221d}.error-card strong{display:block;font-size:14px}.error-card p{margin:6px 0 9px;font-size:12px;line-height:1.45}.error-card code{display:inline-block;padding:4px 7px;border-radius:6px;background:#f5d6d2;color:#852b24;font:700 11px ui-monospace,monospace}.error-card div{display:flex;align-items:center;gap:8px;margin-top:10px}.error-button{min-height:36px;background:#b9382e;color:white}.error-card span{font-size:10px;color:#852b24}.form-grid input{box-sizing:border-box;min-width:0}
+details{margin-top:10px}summary span{float:right;color:#69716d;font-size:11px}.comment-search{display:flex;flex-direction:column;gap:5px;margin-top:12px;color:#616b66;font-size:11px}.comment-search input{box-sizing:border-box;width:100%;height:39px;border:1px solid #ced2ce;border-radius:9px;background:#fbfbf8;color:#19201e;padding:0 10px;font:14px sans-serif}.comment-list-summary{margin:9px 0;color:#69716d;font-size:10px}.comment-list{display:flex;flex-direction:column;gap:7px;max-height:310px;overflow:auto;overscroll-behavior:contain}.comment-card{padding:9px;border:1px solid #e3e5e1;border-radius:10px;background:#fbfbf8}.comment-heading{display:flex;justify-content:flex-end;color:#174f3f;font-size:10px}.comment-card strong{display:block;margin-top:4px;font-size:12px}.comment-card p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.45}.comment-card small{display:block;color:#69716d;font-size:10px}.comment-card a{display:inline-block;margin-top:5px;color:#174f3f;font-size:10px}.raw-export-row{margin-top:10px}.raw-export-row .button{width:100%}.copy-state{margin:7px 0 0;color:#174f3f;font-size:10px}.advanced{padding:10px;background:#f2f1eb}
 @media(max-width:520px){:host{left:10px;right:10px}.panel{width:100%;max-height:calc(100dvh - 20px)}.form-grid{gap:8px}.body{padding:12px}}
 </style>`; }

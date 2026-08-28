@@ -1,6 +1,6 @@
 {
   "name": "fb-comment-giveaway",
-  "version": "0.1.0",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "description": "在 Facebook 目前頁面本機擷取留言並抽獎的 Bookmarklet",
